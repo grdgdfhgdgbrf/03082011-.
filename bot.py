@@ -199,14 +199,15 @@ class PromoCode:
     is_active: bool = True
     min_level: int = 1
     description: str = ""
+
 @dataclass
 class ExchangeOrder:
     order_id: str
     user_id: int
-    order_type: str  # "buy" или "sell"
-    rate: float  # сколько premium coin за 1 золото или наоборот
-    amount: int  # количество premium coin
-    balance: int  # остаток для исполнения
+    order_type: str
+    rate: float
+    amount: int
+    balance: int
     created_at: datetime = field(default_factory=datetime.now)
     is_active: bool = True
     
@@ -214,23 +215,26 @@ class ExchangeBalance:
     def __init__(self):
         self.gold: int = 0
         self.premium: int = 0
+
 @dataclass
 class PromoCodeActivation:
     user_id: int
     code: str
     activated_at: datetime = field(default_factory=datetime.now)
+
 @dataclass
 class Boost:
     boost_id: str
     name: str
     description: str
-    boost_type: str  # mining_multiplier, luck_multiplier, gold_multiplier, auto_boost
+    boost_type: str
     value: float
-    duration: int  # в секундах
+    duration: int
     price_gold: int
     price_premium: int
     is_active: bool = True
     expires_at: Optional[datetime] = None
+
 class RouletteBetType(Enum):
     RED = "🔴 Красное"
     BLACK = "⚫ Черное"
@@ -330,6 +334,7 @@ class CollectibleType(Enum):
     ANCIENT_RELIC = "🏺 Древний артефакт"
     MINERAL_EGG = "🥚 Минеральное яйцо"
     COSMIC_ARTIFACT = "🌌 Космический артефакт"
+
 class BanType(Enum):
     TEMPORARY = "⏱️ Временный"
     PERMANENT = "🚫 Навсегда"
@@ -380,6 +385,8 @@ class MiningSession:
     total_mining_time: float = 0
     last_activity: datetime = field(default_factory=datetime.now)
     last_notification_time: Optional[datetime] = None
+    luck_multiplier: float = 1.0
+    mining_multiplier: float = 1.0
 
 @dataclass
 class AutoMiningSession:
@@ -513,12 +520,12 @@ class Player:
     last_command_time: Dict[str, float] = field(default_factory=dict)
     last_activity: datetime = field(default_factory=datetime.now)
     notification_cooldown: float = 5.0
-    # В dataclass Player добавить:
-    referrer_id: Optional[int] = None  # ID пригласившего
+    referrer_id: Optional[int] = None
     referral_code: str = field(default_factory=lambda: ''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=6)))
-    referral_count: int = 0  # количество приглашенных
-    referral_rewards_claimed: int = 0  # получено наград
-    referral_bonus_multiplier: float = 1.0  # бонус от рефералов
+    referral_count: int = 0
+    referral_rewards_claimed: int = 0
+    referral_bonus_multiplier: float = 1.0
+    
     def __post_init__(self):
         if not self.custom_name:
             self.custom_name = self.first_name
@@ -531,6 +538,7 @@ class Player:
                 self.collectibles[collectible_type.name] = 0
         if not self.referral_code:
             self.referral_code = ''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=6))
+            
     def _update_unlocked_minerals_by_level(self):
         if not self.unlocked_minerals:
             self.unlocked_minerals = []
@@ -842,13 +850,18 @@ class DataManager:
         self._save_queue = asyncio.Queue()
         self._save_worker_task = None
         
+        self.exchange_orders: Dict[str, ExchangeOrder] = {}
+        self.exchange_balances: Dict[int, ExchangeBalance] = defaultdict(ExchangeBalance)
+        self.active_boosts: Dict[int, List[Boost]] = defaultdict(list)
+        self.available_boosts: Dict[str, Boost] = {}
+        
         self.load_data()
         self.initialize_game_data()
         self.initialize_promocodes()
+        self.init_boosts()
+        
     def create_referral(self, user_id: int, referrer_code: str) -> Tuple[bool, str]:
-        """Создание реферальной связи"""
         try:
-            # Найти пригласившего по коду
             referrer = None
             for p in self.players.values():
                 if p.referral_code == referrer_code.upper():
@@ -871,11 +884,9 @@ class DataManager:
             player.referrer_id = referrer.user_id
             referrer.referral_count += 1
             
-            # Бонус за приглашение
             bonus_gold = 500 + (referrer.referral_count * 50)
             referrer.gold_balance += bonus_gold
             
-            # Увеличиваем множитель бонуса
             referrer.referral_bonus_multiplier = 1.0 + (referrer.referral_count * 0.05)
             
             asyncio.create_task(self.batch_save())
@@ -884,6 +895,7 @@ class DataManager:
         
         except Exception:
             return False, "❌ Ошибка!"
+            
     def initialize_promocodes(self):
         if not self.promocodes:
             self.promocodes["GOLD100"] = PromoCode(
@@ -959,15 +971,12 @@ class DataManager:
                 description="Магнатский пакет: 30000🪙 + миф ящик + топливо 600мин + легенд инструмент"
             )
     
-    
     def upgrade_collection(self, user_id: int, collectible_type: str) -> Tuple[bool, str, Dict[str, Any]]:
-        """Улучшение коллекции за золото"""
         try:
             player = self.players.get(user_id)
             if not player or player.is_banned:
                 return False, "❌ Игрок не найден", {}
             
-            # Цены на улучшение в зависимости от типа
             upgrade_prices = {
                 "COSMIC_ARTIFACT": 50000,
                 "GEMSTONE": 30000,
@@ -980,17 +989,14 @@ class DataManager:
             if player.gold_balance < price:
                 return False, f"❌ Нужно: {price} 🪙", {}
             
-            # Проверяем наличие коллекции
             current_count = player.collectibles.get(collectible_type, 0)
             if current_count < 3:
                 return False, f"❌ Нужно собрать 3 предмета этой коллекции!", {}
             
             player.gold_balance -= price
             
-            # Создаем уникальный ID коллекции
             collection_id = f"{collectible_type}_{player.user_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
             
-            # Удаляем предметы коллекции
             items_to_remove = []
             for item_id in player.inventory:
                 item = self.get_item(item_id)
@@ -1002,10 +1008,8 @@ class DataManager:
                 if item_id in self.items:
                     del self.items[item_id]
             
-            # Уменьшаем счетчик коллекции
             player.collectibles[collectible_type] -= 3
             
-            # Добавляем характеристику улучшенной коллекции
             if not hasattr(player, 'upgraded_collections'):
                 player.upgraded_collections = {}
             
@@ -1031,8 +1035,8 @@ class DataManager:
         
         except Exception:
             return False, "❌ Ошибка", {}    
+            
     def init_boosts(self):
-        """Инициализация доступных бустов"""
         self.available_boosts = {
             "boost_1": Boost(
                 boost_id="boost_1",
@@ -1040,7 +1044,7 @@ class DataManager:
                 description="Увеличивает количество добываемых минералов на 50%",
                 boost_type="mining_multiplier",
                 value=1.5,
-                duration=3600,  # 1 час
+                duration=3600,
                 price_gold=5000,
                 price_premium=10
             ),
@@ -1050,7 +1054,7 @@ class DataManager:
                 description="Увеличивает шанс найти Premium Coin на 100%",
                 boost_type="luck_multiplier",
                 value=2.0,
-                duration=1800,  # 30 мин
+                duration=1800,
                 price_gold=3000,
                 price_premium=5
             ),
@@ -1070,14 +1074,13 @@ class DataManager:
                 description="Ускоряет автодобычу в 2 раза",
                 boost_type="auto_boost",
                 value=2.0,
-                duration=7200,  # 2 часа
+                duration=7200,
                 price_gold=10000,
                 price_premium=20
             )
         }
     
     def buy_boost(self, user_id: int, boost_id: str, pay_with_premium: bool = False) -> Tuple[bool, str]:
-        """Покупка буста"""
         try:
             player = self.players.get(user_id)
             if not player or player.is_banned:
@@ -1096,7 +1099,6 @@ class DataManager:
                     return False, f"❌ Недостаточно золота! Нужно: {boost.price_gold}"
                 player.gold_balance -= boost.price_gold
             
-            # Активируем буст
             boost_copy = Boost(
                 boost_id=boost.boost_id,
                 name=boost.name,
@@ -1118,7 +1120,6 @@ class DataManager:
             return False, "❌ Ошибка"
     
     def get_active_boosts(self, user_id: int) -> List[Boost]:
-        """Получить активные бусты"""
         now = datetime.now()
         active = []
         to_remove = []
@@ -1129,21 +1130,19 @@ class DataManager:
             else:
                 to_remove.append(boost)
         
-        # Удаляем истекшие
         for boost in to_remove:
             self.active_boosts[user_id].remove(boost)
         
         return active
     
     def get_boost_multiplier(self, user_id: int, boost_type: str) -> float:
-        """Получить общий множитель от бустов"""
         multiplier = 1.0
         for boost in self.get_active_boosts(user_id):
             if boost.boost_type == boost_type:
                 multiplier *= boost.value
         return multiplier    
+    
     def create_exchange_order(self, user_id: int, order_type: str, rate: float, amount: int) -> Tuple[bool, str]:
-        """Создать ордер на обмен"""
         try:
             player = self.players.get(user_id)
             if not player or player.is_banned:
@@ -1155,14 +1154,11 @@ class DataManager:
             if amount < 1:
                 return False, "❌ Сумма должна быть положительной"
             
-            # Проверка баланса
             if order_type == "buy":
-                # Покупаем premium за золото
                 required_gold = int(amount * rate)
                 if player.gold_balance < required_gold:
                     return False, f"❌ Недостаточно золота! Нужно: {required_gold} 🪙"
             else:
-                # Продаем premium за золото
                 if player.premium_coin_balance < amount:
                     return False, f"❌ Недостаточно Premium Coin! Нужно: {amount} 💎"
             
@@ -1176,7 +1172,6 @@ class DataManager:
                 balance=amount
             )
             
-            # Блокируем средства
             if order_type == "buy":
                 required_gold = int(amount * rate)
                 player.gold_balance -= required_gold
@@ -1196,39 +1191,33 @@ class DataManager:
             return False, "❌ Ошибка"
     
     def match_exchange_orders(self, order_type: str) -> List[Tuple[ExchangeOrder, ExchangeOrder]]:
-        """Сопоставление ордеров на покупку и продажу"""
         matches = []
         
         buy_orders = [o for o in self.exchange_orders.values() if o.order_type == "buy" and o.is_active and o.balance > 0]
         sell_orders = [o for o in self.exchange_orders.values() if o.order_type == "sell" and o.is_active and o.balance > 0]
         
-        buy_orders.sort(key=lambda x: x.rate, reverse=True)  # Лучший курс покупки сверху
-        sell_orders.sort(key=lambda x: x.rate)  # Лучший курс продажи сверху
+        buy_orders.sort(key=lambda x: x.rate, reverse=True)
+        sell_orders.sort(key=lambda x: x.rate)
         
         for buy in buy_orders[:]:
             for sell in sell_orders[:]:
-                if buy.rate >= sell.rate:  # Если курс покупки >= курса продажи
-                    # Есть возможность сделки
+                if buy.rate >= sell.rate:
                     amount = min(buy.balance, sell.balance)
                     if amount > 0:
                         matches.append((buy, sell, amount))
                         buy.balance -= amount
                         sell.balance -= amount
                         
-                        # Исполняем сделку
                         buyer = self.players.get(buy.user_id)
                         seller = self.players.get(sell.user_id)
                         
                         if buyer and seller:
-                            # Передаем premium coin
                             buyer.premium_coin_balance += amount
                             seller.premium_coin_balance -= amount
                             
-                            # Передаем золото
-                            gold_amount = int(amount * sell.rate)  # По курсу продавца
+                            gold_amount = int(amount * sell.rate)
                             seller.gold_balance += gold_amount
                             
-                            # Выводим из балансов обменника
                             buyer_balance = self.exchange_balances[buy.user_id]
                             seller_balance = self.exchange_balances[sell.user_id]
                             
@@ -1251,7 +1240,6 @@ class DataManager:
         return matches
     
     def cancel_exchange_order(self, user_id: int, order_id: str) -> Tuple[bool, str]:
-        """Отмена ордера"""
         try:
             order = self.exchange_orders.get(order_id)
             if not order:
@@ -1265,12 +1253,10 @@ class DataManager:
                 balance = self.exchange_balances[user_id]
                 
                 if order.order_type == "buy":
-                    # Возвращаем золото
                     gold_amount = int(order.balance * order.rate)
                     player.gold_balance += gold_amount
                     balance.gold -= gold_amount
                 else:
-                    # Возвращаем premium
                     player.premium_coin_balance += order.balance
                     balance.premium -= order.balance
             
@@ -1283,12 +1269,10 @@ class DataManager:
             return False, "❌ Ошибка"
     
     def get_exchange_balances(self, user_id: int) -> Dict[str, int]:
-        """Получить балансы обменника"""
         balance = self.exchange_balances.get(user_id, ExchangeBalance())
         return {"gold": balance.gold, "premium": balance.premium}
     
     def withdraw_exchange_balance(self, user_id: int, currency: str, amount: int) -> Tuple[bool, str]:
-        """Вывод из обменника"""
         try:
             player = self.players.get(user_id)
             if not player:
@@ -1318,7 +1302,6 @@ class DataManager:
             return False, "❌ Ошибка"
     
     def deposit_exchange_balance(self, user_id: int, currency: str, amount: int) -> Tuple[bool, str]:
-        """Пополнение обменника"""
         try:
             player = self.players.get(user_id)
             if not player:
@@ -1344,6 +1327,7 @@ class DataManager:
         
         except Exception:
             return False, "❌ Ошибка"
+            
     async def start_save_worker(self):
         if self._save_worker_task is None:
             self._save_worker_task = asyncio.create_task(self._save_worker())
@@ -1566,7 +1550,12 @@ class DataManager:
             'active_discounts': player.active_discounts.copy() if hasattr(player, 'active_discounts') else {},
             'market_offers': player.market_offers.copy() if hasattr(player, 'market_offers') else [],
             'last_command_time': player.last_command_time.copy() if hasattr(player, 'last_command_time') else {},
-            'notification_cooldown': getattr(player, 'notification_cooldown', 5.0)
+            'notification_cooldown': getattr(player, 'notification_cooldown', 5.0),
+            'referrer_id': player.referrer_id,
+            'referral_code': player.referral_code,
+            'referral_count': player.referral_count,
+            'referral_rewards_claimed': player.referral_rewards_claimed,
+            'referral_bonus_multiplier': player.referral_bonus_multiplier
         }
 
     def _deserialize_player(self, data: Dict) -> Optional[Player]:
@@ -1606,7 +1595,12 @@ class DataManager:
                 fuel=data.get('fuel', 0),
                 is_banned=data.get('is_banned', False),
                 reincarnation_level=data.get('reincarnation_level', 0),
-                reincarnation_multiplier=data.get('reincarnation_multiplier', 1.0)
+                reincarnation_multiplier=data.get('reincarnation_multiplier', 1.0),
+                referrer_id=data.get('referrer_id'),
+                referral_code=data.get('referral_code', ''),
+                referral_count=data.get('referral_count', 0),
+                referral_rewards_claimed=data.get('referral_rewards_claimed', 0),
+                referral_bonus_multiplier=data.get('referral_bonus_multiplier', 1.0)
             )
             
             player.custom_name = data.get('custom_name', player.first_name)
@@ -2130,29 +2124,30 @@ class DataManager:
                 sell_price=int(price * 0.6),
                 is_tradable=True
             )
-            # Космические артефакты (новая коллекция)
+            
         cosmic_artifacts = [
             ("🌠 Осколок звезды", "Частица упавшей звезды", ItemRarity.RARE, 8000),
-             ("🪐 Кольцо Сатурна", "Частица газового гиганта", ItemRarity.EPIC, 20000),
-             ("🌌 Туманность Ориона", "Сгусток космической энергии", ItemRarity.LEGENDARY, 50000),
-             ("⚫ Сингулярность", "Миниатюрная черная дыра", ItemRarity.MYTHIC, 100000)
-            ]
+            ("🪐 Кольцо Сатурна", "Частица газового гиганта", ItemRarity.EPIC, 20000),
+            ("🌌 Туманность Ориона", "Сгусток космической энергии", ItemRarity.LEGENDARY, 50000),
+            ("⚫ Сингулярность", "Миниатюрная черная дыра", ItemRarity.MYTHIC, 100000)
+        ]
             
         for name, desc, rarity, value in cosmic_artifacts:
-                item_id = str(uuid.uuid4())
-                self.items[item_id] = Item(
-                    item_id=item_id,
-                    serial_number=self.generate_serial_number(),
-                    name=name,
-                    item_type=ItemType.COLLECTIBLE,
-                    rarity=rarity,
-                    description=desc,
-                    buy_price=value,
-                    sell_price=int(value * 0.3),
-                    is_tradable=True,
-                    is_collectible=True,
-                    collectible_type=CollectibleType.COSMIC_ARTIFACT
-                )
+            item_id = str(uuid.uuid4())
+            self.items[item_id] = Item(
+                item_id=item_id,
+                serial_number=self.generate_serial_number(),
+                name=name,
+                item_type=ItemType.COLLECTIBLE,
+                rarity=rarity,
+                description=desc,
+                buy_price=value,
+                sell_price=int(value * 0.3),
+                is_tradable=True,
+                is_collectible=True,
+                collectible_type=CollectibleType.COSMIC_ARTIFACT
+            )
+            
         fuels = [
             ("⛽ Угольные брикеты", "60 мин", 60, 800, ItemRarity.COMMON),
             ("🔥 Нефтяное топливо", "180 мин", 180, 2000, ItemRarity.RARE),
@@ -2281,32 +2276,32 @@ class DataManager:
                 sell_price=int(case.price * 0.5),
                 is_tradable=True
             )
-            # Добавить в конец метода create_initial_items:
-            # Новые предметы для перерождения
+            
         reincarnation_items = [
             "🔮 Звездный кристалл",
             "⚜️ Древний тотем",
             "🌙 Лунный амулет",
             "☀️ Солнечный диск",
             "🌀 Око времени",
-             "💫 Частица хаоса"
-            ]
+            "💫 Частица хаоса"
+        ]
             
         for item_name in reincarnation_items:
-                item_id = str(uuid.uuid4())
-                self.items[item_id] = Item(
-                    item_id=item_id,
-                    serial_number=self.generate_serial_number(),
-                    name=item_name,
-                    item_type=ItemType.COLLECTIBLE,
-                    rarity=ItemRarity.LEGENDARY,
-                    description="Древний артефакт, необходимый для перерождения",
-                    buy_price=75000,
-                    sell_price=37500,
-                    is_tradable=True,
-                    is_collectible=True,
-                    collectible_type=CollectibleType.ANCIENT_RELIC
-                )
+            item_id = str(uuid.uuid4())
+            self.items[item_id] = Item(
+                item_id=item_id,
+                serial_number=self.generate_serial_number(),
+                name=item_name,
+                item_type=ItemType.COLLECTIBLE,
+                rarity=ItemRarity.LEGENDARY,
+                description="Древний артефакт, необходимый для перерождения",
+                buy_price=75000,
+                sell_price=37500,
+                is_tradable=True,
+                is_collectible=True,
+                collectible_type=CollectibleType.ANCIENT_RELIC
+            )
+            
     def get_or_create_player(self, user_id: int, username: str, first_name: str) -> Optional[Player]:
         try:
             self._player_last_access[user_id] = time.time()
@@ -2394,7 +2389,6 @@ class DataManager:
             return False, f"❌ Ошибка", 0
 
     def start_mining(self, user_id: int, mineral_name: str) -> Tuple[bool, str, Dict[str, Any]]:
-        """Новая версия добычи с улучшенным отображением"""
         try:
             player = self.players.get(user_id)
             if not player:
@@ -2420,7 +2414,6 @@ class DataManager:
             
             base_reward_per_hit = 5 * player.miner_level
             
-            # Получаем множители от бустов
             mining_multiplier = self.get_boost_multiplier(user_id, "mining_multiplier")
             luck_multiplier = self.get_boost_multiplier(user_id, "luck_multiplier")
             
@@ -2443,7 +2436,9 @@ class DataManager:
                 hit_interval=hit_interval,
                 total_mining_time=total_mining_time,
                 last_activity=start_time,
-                last_notification_time=None
+                last_notification_time=None,
+                luck_multiplier=luck_multiplier,
+                mining_multiplier=mining_multiplier
             )
             
             self.active_mining_sessions[user_id] = session
@@ -2451,27 +2446,21 @@ class DataManager:
             player.last_mining_time = start_time
             player.current_mining_session = mineral_name
             
-            # Сохраняем множители для отображения
-            session.luck_multiplier = luck_multiplier
-            session.mining_multiplier = mining_multiplier
-            
             asyncio.create_task(self.batch_save())
             
-            # Формируем красивое сообщение о начале добычи
             text = f"""
-    ⛏ Ты копаешь
-    ············
-    ⛰ Шахта : {mineral.value}
-    🔥 Мощность : ×{session.mineral_multiplier:.2f}
-    📦 Шанс найти кейс : ×{player.get_case_chance() * 100:.1f}%
-    ⏳ Времени прошло : 0с.
-    ············
-    ⛏ Удары киркой : 0
-    🧱 Руды добыто : 0
-    ············
-    """
+⛏ Ты копаешь
+············
+⛰ Шахта : {mineral.value}
+🔥 Мощность : ×{session.mineral_multiplier:.2f}
+📦 Шанс найти кейс : ×{player.get_case_chance() * 100:.1f}%
+⏳ Времени прошло : 0с.
+············
+⛏ Удары киркой : 0
+🧱 Руды добыто : 0
+············
+"""
             
-            # Добавляем активные бусты
             active_boosts = self.get_active_boosts(user_id)
             if active_boosts:
                 text += "Активные бусты\n"
@@ -2485,6 +2474,7 @@ class DataManager:
         
         except Exception:
             return False, f"❌ Ошибка", {}    
+    
     def process_auto_hit(self, user_id: int) -> Tuple[bool, Dict[str, Any]]:
         try:
             if user_id not in self.active_mining_sessions:
@@ -2507,7 +2497,6 @@ class DataManager:
             if now >= session.end_time:
                 return self.complete_mining(user_id)
             
-            # Получаем буст множитель для золота
             gold_multiplier = self.get_boost_multiplier(user_id, "gold_multiplier")
             
             mineral_reward = player.get_mineral_per_hit(session.base_reward_per_hit) * session.mineral_multiplier
@@ -2876,7 +2865,6 @@ class DataManager:
             player.total_experience += exp_gained
             self._check_level_up(player)
             
-            # Сбор предметов
             dropped_items = []
             case_chance = player.get_case_chance()
             
@@ -2929,20 +2917,19 @@ class DataManager:
             
             asyncio.create_task(self.batch_save())
             
-            # Формируем красивый результат
             result_text = f"""
-    🎒 Ресурсы собраны!
-    ············
-    ⏳ Время копания : {int(session.total_mining_time // 60)}м. {int(session.total_mining_time % 60)}с.
-    ············
-    ⛏ Удары киркой : {session.total_hits:,}
-    🧱 Руды получено : {total_mineral_reward:.2f}{session.mineral.value}
-    ············
-    📦 Собрано :
-     {cases_found} шт.
-    ············
-    💡 Продать руду можно в 🎒 Рюкзак
-    """
+🎒 Ресурсы собраны!
+············
+⏳ Время копания : {int(session.total_mining_time // 60)}м. {int(session.total_mining_time % 60)}с.
+············
+⛏ Удары киркой : {session.total_hits:,}
+🧱 Руды получено : {total_mineral_reward:.2f}{session.mineral.value}
+············
+📦 Собрано :
+ {cases_found} шт.
+············
+💡 Продать руду можно в 🎒 Рюкзак
+"""
             
             return True, {
                 "success": True,
@@ -5899,16 +5886,10 @@ class MinerichBot:
         self._rate_limit_lock = asyncio.Lock()
         self.notification_queue = asyncio.Queue()
         self._callback_lock = asyncio.Lock()
-        self.exchange_orders: Dict[str, ExchangeOrder] = {}
-        self.exchange_balances: Dict[int, ExchangeBalance] = defaultdict(ExchangeBalance)
         global data_manager, bot_instance
         data_manager = DataManager(self.bot)
         bot_instance = self
-        self.active_boosts: Dict[int, List[Boost]] = defaultdict(list)
-        self.available_boosts: Dict[str, Boost] = {}
-        self.init_boosts()
         self.register_handlers()
-        asyncio.create_task(self.process_notification_queue())
 
     async def process_notification_queue(self):
         while True:
@@ -6038,7 +6019,6 @@ class MinerichBot:
                     reply_markup=await self.keyboard_manager.main_menu(),
                     parse_mode=ParseMode.MARKDOWN
                 )
-                # В конце обработчика cmd_start, после создания игрока:
                 args = message.text.split()
                 if len(args) > 1:
                     referrer_code = args[1].upper()
@@ -6048,6 +6028,7 @@ class MinerichBot:
                             await self.safe_send_message(message.chat.id, msg)
             except Exception:
                 await message.answer("❌ Произошла ошибка. Попробуйте позже.")
+                
         @self.dp.message(Command("referral"))
         async def cmd_referral(message: Message):
             try:
@@ -6066,26 +6047,26 @@ class MinerichBot:
                     return
                 
                 text = f"""
-        🎁 РЕФЕРАЛЬНАЯ СИСТЕМА
-        
-        Ваш реферальный код: `{player.referral_code}`
-        
-        📊 Статистика:
-        • Приглашено: {player.referral_count}
-        • Бонус множитель: x{player.referral_bonus_multiplier:.2f}
-        • Наград получено: {player.referral_rewards_claimed} 🪙
-        
-        💡 Как это работает:
-        1. Поделитесь своим кодом: {BOT_USERNAME}?start={player.referral_code}
-        2. Когда друг начнет игру, вы получите бонус!
-        3. Каждый новый реферал увеличивает ваш множитель дохода
-        
-        💰 Награды:
-        • За 1 реферала: 500 🪙
-        • За 5 рефералов: + Мифический ящик
-        • За 10 рефералов: + Королевский рубин
-        • За 20 рефералов: + 10% к множителю
-        """
+🎁 РЕФЕРАЛЬНАЯ СИСТЕМА
+
+Ваш реферальный код: `{player.referral_code}`
+
+📊 Статистика:
+• Приглашено: {player.referral_count}
+• Бонус множитель: x{player.referral_bonus_multiplier:.2f}
+• Наград получено: {player.referral_rewards_claimed} 🪙
+
+💡 Как это работает:
+1. Поделитесь своим кодом: {BOT_USERNAME}?start={player.referral_code}
+2. Когда друг начнет игру, вы получите бонус!
+3. Каждый новый реферал увеличивает ваш множитель дохода
+
+💰 Награды:
+• За 1 реферала: 500 🪙
+• За 5 рефералов: + Мифический ящик
+• За 10 рефералов: + Королевский рубин
+• За 20 рефералов: + 10% к множителю
+"""
                 await self.safe_send_message(
                     message.chat.id,
                     text,
@@ -6093,6 +6074,7 @@ class MinerichBot:
                 )
             except Exception:
                 await message.answer("❌ Ошибка!")
+                
         @self.dp.message(Command("donate"))
         async def cmd_donate(message: Message):
             try:
@@ -6122,9 +6104,9 @@ class MinerichBot:
                 )
             except Exception:
                 await message.answer("❌ Произошла ошибка. Попробуйте позже.")
+                
         @self.dp.message(Command("me"))
         async def cmd_me(message: Message):
-            """РП команда /me"""
             if not message.reply_to_message:
                 await message.answer("❌ Использование: /me @username")
                 return
@@ -6142,12 +6124,10 @@ class MinerichBot:
         
         @self.dp.message(Command("shrug"))
         async def cmd_shrug(message: Message):
-            """РП команда /shrug"""
             await message.reply(f"¯\\_(ツ)_/¯")
         
         @self.dp.message(Command("highfive"))
         async def cmd_highfive(message: Message):
-            """РП команда /highfive"""
             if not message.reply_to_message:
                 await message.answer("❌ Использование: /highfive @username")
                 return
@@ -6157,7 +6137,6 @@ class MinerichBot:
         
         @self.dp.message(Command("slap"))
         async def cmd_slap(message: Message):
-            """РП команда /slap"""
             if not message.reply_to_message:
                 await message.answer("❌ Использование: /slap @username")
                 return
@@ -6170,7 +6149,6 @@ class MinerichBot:
         
         @self.dp.message(Command("hug"))
         async def cmd_hug(message: Message):
-            """РП команда /hug"""
             if not message.reply_to_message:
                 await message.answer("❌ Использование: /hug @username")
                 return
@@ -6180,7 +6158,6 @@ class MinerichBot:
         
         @self.dp.message(Command("profile"))
         async def cmd_profile_chat(message: Message):
-            """Краткий профиль в чате"""
             target = message.reply_to_message.from_user if message.reply_to_message else message.from_user
             
             if not data_manager:
@@ -6203,7 +6180,6 @@ class MinerichBot:
         
         @self.dp.message(Command("balance"))
         async def cmd_balance_chat(message: Message):
-            """Краткий баланс в чате"""
             if not data_manager:
                 await message.answer("❌ Ошибка")
                 return
@@ -6224,7 +6200,6 @@ class MinerichBot:
         
         @self.dp.message(Command("top"))
         async def cmd_top_chat(message: Message):
-            """Топ в чате"""
             if not data_manager:
                 await message.answer("❌ Ошибка")
                 return
@@ -6239,9 +6214,9 @@ class MinerichBot:
         
         @self.dp.message(Command("id"))
         async def cmd_id(message: Message):
-            """Показать ID пользователя"""
             target = message.reply_to_message.from_user if message.reply_to_message else message.from_user
             await message.reply(f"🆔 ID пользователя: `{target.id}`", parse_mode=ParseMode.MARKDOWN)
+            
         @self.dp.message(Command("paysupport"))
         async def cmd_paysupport(message: Message):
             try:
@@ -6270,9 +6245,9 @@ class MinerichBot:
                 )
             except Exception:
                 await message.answer("❌ Произошла ошибка. Попробуйте позже.")
+                
         @self.dp.message(Command("roll"))
         async def cmd_roll(message: Message):
-            """Команда /roll [макс]"""
             args = message.text.split()
             max_val = 100
             
@@ -6284,6 +6259,7 @@ class MinerichBot:
             
             result = random.randint(1, max_val)
             await message.reply(f"🎲 {message.from_user.first_name} выбросил {result} из {max_val}!")
+            
         @self.dp.message(Command("mine"))
         async def cmd_mine(message: Message):
             try:
@@ -6313,6 +6289,7 @@ class MinerichBot:
                 )
             except Exception:
                 await message.answer("❌ Произошла ошибка. Попробуйте позже.")
+                
         @self.dp.message(Command("exchange"))
         async def cmd_exchange(message: Message):
             try:
@@ -6331,11 +6308,8 @@ class MinerichBot:
                     return
                 
                 balances = data_manager.get_exchange_balances(message.from_user.id)
-                
-                # Сопоставляем ордера
                 data_manager.match_exchange_orders("both")
                 
-                # Получаем лучшие ордера
                 buy_orders = [o for o in data_manager.exchange_orders.values() if o.order_type == "buy" and o.is_active and o.balance > 0]
                 sell_orders = [o for o in data_manager.exchange_orders.values() if o.order_type == "sell" and o.is_active and o.balance > 0]
                 
@@ -6343,14 +6317,14 @@ class MinerichBot:
                 sell_orders.sort(key=lambda x: x.rate)
                 
                 text = f"""
-        💱 ОБМЕННИК PREMIUM COIN
-        
-        💰 Ваш баланс в обменнике:
-        • 🪙 Золото: {balances['gold']}
-        • 💎 Premium Coin: {balances['premium']}
-        
-        📈 ЛУЧШИЕ КУРСЫ НА ПОКУПКУ (покупаем 💎 за 🪙):
-        """
+💱 ОБМЕННИК PREMIUM COIN
+
+💰 Ваш баланс в обменнике:
+• 🪙 Золото: {balances['gold']}
+• 💎 Premium Coin: {balances['premium']}
+
+📈 ЛУЧШИЕ КУРСЫ НА ПОКУПКУ (покупаем 💎 за 🪙):
+"""
                 for i, order in enumerate(buy_orders[:5], 1):
                     text += f"{i}. Курс: {order.rate} 💎/🪙 | Доступно: {order.balance} 💎\n"
                 
@@ -6367,13 +6341,14 @@ class MinerichBot:
                 builder.adjust(2)
                 
                 await self.safe_edit_message(
-                    callback.message if hasattr(message, 'edit') else message,
+                    message,
                     text,
                     reply_markup=builder.as_markup(),
                     parse_mode=ParseMode.MARKDOWN
                 )
             except Exception:
                 await message.answer("❌ Ошибка!")
+                
         @self.dp.message(Command("profile"))
         async def cmd_profile(message: Message):
             try:
@@ -6709,6 +6684,7 @@ class MinerichBot:
                 await message.answer(msg)
             except Exception:
                 await message.answer(f"❌ Ошибка")
+                
         @self.dp.message(Command("market"))
         async def cmd_market(message: Message):
             try:
@@ -6726,7 +6702,6 @@ class MinerichBot:
                     await message.answer("❌ Вы забанены.")
                     return
                 
-                # Лимитированные подарки
                 limited_gifts = [
                     {"name": "🎁 Новогодний набор", "price": 10000, "items": ["🎄 Снежинка", "❄️ Ледяная кирка"]},
                     {"name": "🎉 Юбилейный пакет", "price": 50000, "items": ["🎂 Праздничный торт", "🎈 Воздушный шар"]},
@@ -6753,6 +6728,7 @@ class MinerichBot:
                 )
             except Exception:
                 await message.answer("❌ Ошибка!")
+                
         @self.dp.message(Command("as"))
         async def admin_quick_set_level(message: Message):
             if message.from_user.id != ADMIN_ID:
@@ -7593,6 +7569,7 @@ class MinerichBot:
                             parse_mode=ParseMode.MARKDOWN
                         )
                         return
+                        
                     if data.startswith("market_gift_"):
                         gift_index = int(data[12:]) - 1
                         limited_gifts = [
@@ -7619,7 +7596,6 @@ class MinerichBot:
                         
                         player.gold_balance -= gift["price"]
                         
-                        # Создаем предметы
                         for item_name in gift["items"]:
                             item_id = str(uuid.uuid4())
                             new_item = Item(
@@ -7647,7 +7623,8 @@ class MinerichBot:
                             reply_markup=await self.keyboard_manager.main_menu(),
                             parse_mode=ParseMode.MARKDOWN
                         )
-                        return                    
+                        return
+                    
                     if data == "profile_menu":
                         if not data_manager:
                             await callback.message.edit_text("❌ Ошибка сервера.")
