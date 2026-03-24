@@ -27,7 +27,7 @@ from collections import defaultdict
 # ========== НАСТРОЙКИ ==========
 ADMIN_ID = 5356400377
 ADMIN_USERNAME = "@hjklgf1"
-BOT_TOKEN = "8342623230:AAEcKRGeNUjcm3-_YT_yOfxUGAVMxxHDkRU"
+BOT_TOKEN = "8364913604:AAFMIC-CxlvSZHaFW9tHyPRYw68rLRXLZV0"
 BOT_USERNAME = "@The_Gold_Rushbot"
 GAME_NAME = "⛏️ The Gold Rush "
 MINING_BASE_TIME = 240
@@ -75,6 +75,8 @@ COOLDOWN_COMMANDS = {
     "rul": 2,
     "promocode": 5,
     "callback": 1,
+    "exchange": 2,
+    "nft": 2,
 }
 
 RESET_ITEMS = [
@@ -142,6 +144,52 @@ MINERAL_UNLOCK_LEVELS = {
     49: ["COSMIUM"],
     50: ["GODLIUM"]
 }
+
+class NFTItemRarity(Enum):
+    COMMON = "Обычный"
+    RARE = "Редкий"
+    EPIC = "Эпический"
+    LEGENDARY = "Легендарный"
+    MYTHIC = "Мифический"
+    LIMITED = "👑 Лимитированный"
+
+class NFTItemType(Enum):
+    ARTIFACT = "🏺 Артефакт"
+    WEAPON = "⚔️ Оружие"
+    ARMOR = "🛡️ Броня"
+    PET = "🐉 Питомец"
+    MOUNT = "🐎 Скакун"
+    TITLE = "📜 Титул"
+
+@dataclass
+class NFTItem:
+    nft_id: str
+    name: str
+    item_type: NFTItemType
+    rarity: NFTItemRarity
+    description: str
+    image_url: str = ""
+    level: int = 1
+    max_level: int = 10
+    stats: Dict[str, float] = field(default_factory=dict)
+    upgrade_cost_gold: int = 0
+    upgrade_cost_premium: int = 0
+    is_upgradable: bool = True
+    can_become_limited: bool = False
+    limited_upgrade_cost: int = 0
+    owner_id: Optional[int] = None
+    is_limited: bool = False
+    created_at: datetime = field(default_factory=datetime.now)
+
+@dataclass
+class MarketNFT:
+    nft_id: str
+    seller_id: int
+    seller_name: str
+    price_gold: int
+    price_premium: int
+    created_at: datetime = field(default_factory=datetime.now)
+    is_active: bool = True
 
 class Cache:
     def __init__(self, ttl: int = CACHE_TTL, max_size: int = 10000):
@@ -519,10 +567,11 @@ class Player:
     last_activity: datetime = field(default_factory=datetime.now)
     notification_cooldown: float = 5.0
     referrer_id: Optional[int] = None
-    referral_code: str = field(default_factory=lambda: ''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=6)))
+    referral_code: str = field(default_factory=lambda: ''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=8)))
     referral_count: int = 0
     referral_rewards_claimed: int = 0
     referral_bonus_multiplier: float = 1.0
+    nft_collection: List[str] = field(default_factory=list)
     
     def __post_init__(self):
         if not self.custom_name:
@@ -535,7 +584,7 @@ class Player:
             if collectible_type.name not in self.collectibles:
                 self.collectibles[collectible_type.name] = 0
         if not self.referral_code:
-            self.referral_code = ''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=6))
+            self.referral_code = ''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=8))
     
     def _update_unlocked_minerals_by_level(self):
         if not self.unlocked_minerals:
@@ -853,10 +902,341 @@ class DataManager:
         self.active_boosts: Dict[int, List[Boost]] = defaultdict(list)
         self.available_boosts: Dict[str, Boost] = {}
         
+        self.nft_items: Dict[str, NFTItem] = {}
+        self.market_nft: Dict[str, MarketNFT] = {}
+        
         self.load_data()
         self.initialize_game_data()
         self.initialize_promocodes()
         self.init_boosts()
+        self.init_nft_items()
+    
+    def init_nft_items(self):
+        # Создаем 3 базовых NFT предмета
+        self.nft_items = {
+            "nft_ancient_sword": NFTItem(
+                nft_id="nft_ancient_sword",
+                name="🏺 Древний меч",
+                item_type=NFTItemType.WEAPON,
+                rarity=NFTItemRarity.EPIC,
+                description="Древний артефакт, хранящий силу прошлых эпох",
+                image_url="",
+                level=1,
+                max_level=10,
+                stats={"attack": 10.0, "mining_bonus": 0.2},
+                upgrade_cost_gold=50000,
+                upgrade_cost_premium=5,
+                is_upgradable=True,
+                can_become_limited=True,
+                limited_upgrade_cost=100000
+            ),
+            "nft_dragon_egg": NFTItem(
+                nft_id="nft_dragon_egg",
+                name="🐉 Яйцо дракона",
+                item_type=NFTItemType.PET,
+                rarity=NFTItemRarity.LEGENDARY,
+                description="Из него вылупится верный дракон-компаньон",
+                image_url="",
+                level=1,
+                max_level=10,
+                stats={"luck": 15.0, "premium_chance": 0.05},
+                upgrade_cost_gold=75000,
+                upgrade_cost_premium=8,
+                is_upgradable=True,
+                can_become_limited=True,
+                limited_upgrade_cost=150000
+            ),
+            "nft_crystal_crown": NFTItem(
+                nft_id="nft_crystal_crown",
+                name="👑 Кристальная корона",
+                item_type=NFTItemType.TITLE,
+                rarity=NFTItemRarity.MYTHIC,
+                description="Корона правителя шахт, дарующая великую силу",
+                image_url="",
+                level=1,
+                max_level=10,
+                stats={"multiplier": 0.3, "daily_bonus": 1000},
+                upgrade_cost_gold=100000,
+                upgrade_cost_premium=10,
+                is_upgradable=True,
+                can_become_limited=True,
+                limited_upgrade_cost=200000
+            )
+        }
+    
+    def upgrade_nft(self, user_id: int, nft_id: str, use_premium: bool = False) -> Tuple[bool, str, Dict[str, Any]]:
+        try:
+            player = self.players.get(user_id)
+            if not player or player.is_banned:
+                return False, "❌ Игрок не найден или забанен", {}
+            
+            if nft_id not in player.nft_collection:
+                return False, "❌ У вас нет этого NFT", {}
+            
+            nft = self.nft_items.get(nft_id)
+            if not nft:
+                return False, "❌ NFT не найден", {}
+            
+            if nft.level >= nft.max_level:
+                return False, "❌ NFT достиг максимального уровня", {}
+            
+            if use_premium:
+                if player.premium_coin_balance < nft.upgrade_cost_premium:
+                    return False, f"❌ Недостаточно Premium Coin! Нужно: {nft.upgrade_cost_premium} 💎"
+                player.premium_coin_balance -= nft.upgrade_cost_premium
+            else:
+                if player.gold_balance < nft.upgrade_cost_gold:
+                    return False, f"❌ Недостаточно золота! Нужно: {nft.upgrade_cost_gold} 🪙"
+                player.gold_balance -= nft.upgrade_cost_gold
+            
+            nft.level += 1
+            
+            # Обновляем статы при повышении уровня
+            for stat_name in nft.stats:
+                if "mining_bonus" in stat_name:
+                    nft.stats[stat_name] = nft.stats[stat_name] * 1.1
+                elif "luck" in stat_name:
+                    nft.stats[stat_name] = nft.stats[stat_name] * 1.05
+                elif "multiplier" in stat_name:
+                    nft.stats[stat_name] = nft.stats[stat_name] * 1.1
+                elif "premium_chance" in stat_name:
+                    nft.stats[stat_name] = min(0.3, nft.stats[stat_name] * 1.05)
+                elif "daily_bonus" in stat_name:
+                    nft.stats[stat_name] = int(nft.stats[stat_name] * 1.2)
+            
+            result = {
+                "nft_id": nft.nft_id,
+                "name": nft.name,
+                "level": nft.level,
+                "stats": nft.stats
+            }
+            
+            asyncio.create_task(self.batch_save())
+            
+            return True, f"✅ {nft.name} улучшен до {nft.level} уровня!", result
+            
+        except Exception:
+            return False, "❌ Ошибка", {}
+    
+    def upgrade_nft_to_limited(self, user_id: int, nft_id: str) -> Tuple[bool, str]:
+        try:
+            player = self.players.get(user_id)
+            if not player or player.is_banned:
+                return False, "❌ Игрок не найден или забанен"
+            
+            if nft_id not in player.nft_collection:
+                return False, "❌ У вас нет этого NFT"
+            
+            nft = self.nft_items.get(nft_id)
+            if not nft:
+                return False, "❌ NFT не найден"
+            
+            if not nft.can_become_limited:
+                return False, "❌ Этот NFT нельзя превратить в лимитированный"
+            
+            if nft.level < nft.max_level:
+                return False, f"❌ Сначала улучшите NFT до {nft.max_level} уровня"
+            
+            if player.premium_coin_balance < nft.limited_upgrade_cost:
+                return False, f"❌ Недостаточно Premium Coin! Нужно: {nft.limited_upgrade_cost} 💎"
+            
+            player.premium_coin_balance -= nft.limited_upgrade_cost
+            nft.is_limited = True
+            nft.rarity = NFTItemRarity.LIMITED
+            
+            # Добавляем бонус к статистике
+            for stat_name in nft.stats:
+                nft.stats[stat_name] = nft.stats[stat_name] * 2
+            
+            asyncio.create_task(self.batch_save())
+            
+            return True, f"✅ {nft.name} стал ЛИМИТИРОВАННЫМ! Все статы удвоены!"
+            
+        except Exception:
+            return False, "❌ Ошибка"
+    
+    def buy_nft(self, user_id: int, nft_id: str, price_type: str = "gold") -> Tuple[bool, str]:
+        try:
+            player = self.players.get(user_id)
+            if not player or player.is_banned:
+                return False, "❌ Игрок не найден или забанен"
+            
+            nft = self.nft_items.get(nft_id)
+            if not nft:
+                return False, "❌ NFT не найден"
+            
+            # Проверяем есть ли уже такой NFT у игрока
+            if nft_id in player.nft_collection:
+                return False, "❌ У вас уже есть этот NFT"
+            
+            price_gold = 0
+            price_premium = 0
+            
+            # Устанавливаем цены в зависимости от редкости
+            if nft.rarity == NFTItemRarity.EPIC:
+                price_gold = 50000
+                price_premium = 50
+            elif nft.rarity == NFTItemRarity.LEGENDARY:
+                price_gold = 100000
+                price_premium = 100
+            elif nft.rarity == NFTItemRarity.MYTHIC:
+                price_gold = 200000
+                price_premium = 200
+            else:
+                price_gold = 10000
+                price_premium = 10
+            
+            if price_type == "premium":
+                if player.premium_coin_balance < price_premium:
+                    return False, f"❌ Недостаточно Premium Coin! Нужно: {price_premium} 💎"
+                player.premium_coin_balance -= price_premium
+            else:
+                if player.gold_balance < price_gold:
+                    return False, f"❌ Недостаточно золота! Нужно: {price_gold} 🪙"
+                player.gold_balance -= price_gold
+            
+            player.nft_collection.append(nft_id)
+            asyncio.create_task(self.batch_save())
+            
+            return True, f"✅ Вы купили {nft.name} за {price_gold if price_type == 'gold' else price_premium} {price_type.upper()}!"
+            
+        except Exception:
+            return False, "❌ Ошибка"
+    
+    def get_player_nft_stats(self, user_id: int) -> Dict[str, Any]:
+        try:
+            player = self.players.get(user_id)
+            if not player:
+                return {}
+            
+            total_nft = len(player.nft_collection)
+            limited_nft = 0
+            total_bonus = {}
+            
+            for nft_id in player.nft_collection:
+                nft = self.nft_items.get(nft_id)
+                if nft:
+                    if nft.is_limited:
+                        limited_nft += 1
+                    for stat_name, stat_value in nft.stats.items():
+                        if stat_name not in total_bonus:
+                            total_bonus[stat_name] = 0
+                        total_bonus[stat_name] += stat_value
+            
+            return {
+                "total": total_nft,
+                "limited": limited_nft,
+                "bonus": total_bonus
+            }
+            
+        except Exception:
+            return {}
+    
+    def list_market_nft(self) -> List[MarketNFT]:
+        return list(self.market_nft.values())
+    
+    def create_market_nft(self, user_id: int, nft_id: str, price_gold: int, price_premium: int) -> Tuple[bool, str]:
+        try:
+            player = self.players.get(user_id)
+            if not player or player.is_banned:
+                return False, "❌ Игрок не найден или забанен"
+            
+            if nft_id not in player.nft_collection:
+                return False, "❌ У вас нет этого NFT"
+            
+            if price_gold <= 0 and price_premium <= 0:
+                return False, "❌ Укажите цену в золоте или Premium Coin"
+            
+            market_nft = MarketNFT(
+                nft_id=nft_id,
+                seller_id=user_id,
+                seller_name=player.custom_name,
+                price_gold=price_gold,
+                price_premium=price_premium
+            )
+            
+            market_id = f"market_{nft_id}_{user_id}_{uuid.uuid4().hex[:8]}"
+            self.market_nft[market_id] = market_nft
+            
+            asyncio.create_task(self.batch_save())
+            
+            return True, f"✅ NFT выставлен на рынок!"
+            
+        except Exception:
+            return False, "❌ Ошибка"
+    
+    def buy_market_nft(self, buyer_id: int, market_id: str, use_premium: bool = False) -> Tuple[bool, str]:
+        try:
+            market = self.market_nft.get(market_id)
+            if not market or not market.is_active:
+                return False, "❌ Предложение не найдено"
+            
+            buyer = self.players.get(buyer_id)
+            if not buyer or buyer.is_banned:
+                return False, "❌ Покупатель не найден или забанен"
+            
+            seller = self.players.get(market.seller_id)
+            if not seller:
+                return False, "❌ Продавец не найден"
+            
+            if buyer_id == market.seller_id:
+                return False, "❌ Нельзя купить свой NFT"
+            
+            nft = self.nft_items.get(market.nft_id)
+            if not nft:
+                return False, "❌ NFT не найден"
+            
+            if use_premium:
+                if market.price_premium <= 0:
+                    return False, "❌ Этот NFT нельзя купить за Premium Coin"
+                if buyer.premium_coin_balance < market.price_premium:
+                    return False, f"❌ Недостаточно Premium Coin! Нужно: {market.price_premium} 💎"
+                buyer.premium_coin_balance -= market.price_premium
+                seller.premium_coin_balance += market.price_premium
+            else:
+                if market.price_gold <= 0:
+                    return False, "❌ Этот NFT нельзя купить за золото"
+                if buyer.gold_balance < market.price_gold:
+                    return False, f"❌ Недостаточно золота! Нужно: {market.price_gold} 🪙"
+                buyer.gold_balance -= market.price_gold
+                seller.gold_balance += market.price_gold
+            
+            # Удаляем NFT у продавца
+            if market.nft_id in seller.nft_collection:
+                seller.nft_collection.remove(market.nft_id)
+            
+            # Добавляем NFT покупателю
+            buyer.nft_collection.append(market.nft_id)
+            nft.owner_id = buyer_id
+            
+            market.is_active = False
+            del self.market_nft[market_id]
+            
+            asyncio.create_task(self.batch_save())
+            
+            return True, f"✅ Вы купили {nft.name}!"
+            
+        except Exception:
+            return False, "❌ Ошибка"
+    
+    def cancel_market_nft(self, user_id: int, market_id: str) -> Tuple[bool, str]:
+        try:
+            market = self.market_nft.get(market_id)
+            if not market or not market.is_active:
+                return False, "❌ Предложение не найдено"
+            
+            if market.seller_id != user_id:
+                return False, "❌ Это не ваше предложение"
+            
+            market.is_active = False
+            del self.market_nft[market_id]
+            
+            asyncio.create_task(self.batch_save())
+            
+            return True, "✅ Предложение снято"
+            
+        except Exception:
+            return False, "❌ Ошибка"
     
     def create_referral(self, user_id: int, referrer_code: str) -> Tuple[bool, str]:
         try:
@@ -882,14 +1262,18 @@ class DataManager:
             player.referrer_id = referrer.user_id
             referrer.referral_count += 1
             
-            bonus_gold = 500 + (referrer.referral_count * 50)
+            # Увеличенные награды за рефералов (в 1000 раз)
+            bonus_gold = 500000 + (referrer.referral_count * 50000)
             referrer.gold_balance += bonus_gold
             
             referrer.referral_bonus_multiplier = 1.0 + (referrer.referral_count * 0.05)
             
             asyncio.create_task(self.batch_save())
             
-            return True, f"✅ Вы стали рефералом {referrer.custom_name}!\n🎁 Получено {bonus_gold} 🪙"
+            # Создаем реферальную ссылку
+            referral_link = f"https://t.me/{BOT_USERNAME.lstrip('@')}?start={referrer.referral_code}"
+            
+            return True, f"✅ Вы стали рефералом {referrer.custom_name}!\n🎁 Получено {bonus_gold} 🪙\n🔗 Ваша реферальная ссылка: {referral_link}"
         
         except Exception:
             return False, "❌ Ошибка!"
@@ -1281,6 +1665,8 @@ class DataManager:
                 'ruby_total': self.ruby_total,
                 'exchange_orders': {},
                 'exchange_balances': {},
+                'nft_items': {},
+                'market_nft': {},
                 'version': VERSION,
                 'last_save': datetime.now().isoformat()
             }
@@ -1366,6 +1752,18 @@ class DataManager:
                     }
                 except:
                     continue
+            
+            for nft_id, nft in self.nft_items.items():
+                try:
+                    data['nft_items'][nft_id] = self._serialize_nft(nft)
+                except:
+                    continue
+            
+            for market_id, market in self.market_nft.items():
+                try:
+                    data['market_nft'][market_id] = self._serialize_market_nft(market)
+                except:
+                    continue
 
             temp_file = 'minerich_data_temp.json'
             final_file = 'minerich_data.json'
@@ -1398,6 +1796,90 @@ class DataManager:
 
         except Exception:
             self.stats["errors"] += 1
+    
+    def _serialize_nft(self, nft: NFTItem) -> Dict:
+        return {
+            'nft_id': nft.nft_id,
+            'name': nft.name,
+            'item_type': nft.item_type.value,
+            'rarity': nft.rarity.value,
+            'description': nft.description,
+            'image_url': nft.image_url,
+            'level': nft.level,
+            'max_level': nft.max_level,
+            'stats': nft.stats,
+            'upgrade_cost_gold': nft.upgrade_cost_gold,
+            'upgrade_cost_premium': nft.upgrade_cost_premium,
+            'is_upgradable': nft.is_upgradable,
+            'can_become_limited': nft.can_become_limited,
+            'limited_upgrade_cost': nft.limited_upgrade_cost,
+            'owner_id': nft.owner_id,
+            'is_limited': nft.is_limited,
+            'created_at': nft.created_at.isoformat() if nft.created_at else None
+        }
+    
+    def _deserialize_nft(self, data: Dict) -> Optional[NFTItem]:
+        try:
+            item_type = NFTItemType(data['item_type']) if data.get('item_type') else NFTItemType.ARTIFACT
+            rarity = NFTItemRarity(data['rarity']) if data.get('rarity') else NFTItemRarity.COMMON
+            created_at = datetime.now()
+            if data.get('created_at'):
+                try:
+                    created_at = datetime.fromisoformat(data['created_at'])
+                except:
+                    pass
+            return NFTItem(
+                nft_id=data['nft_id'],
+                name=data['name'],
+                item_type=item_type,
+                rarity=rarity,
+                description=data['description'],
+                image_url=data.get('image_url', ''),
+                level=data.get('level', 1),
+                max_level=data.get('max_level', 10),
+                stats=data.get('stats', {}),
+                upgrade_cost_gold=data.get('upgrade_cost_gold', 0),
+                upgrade_cost_premium=data.get('upgrade_cost_premium', 0),
+                is_upgradable=data.get('is_upgradable', True),
+                can_become_limited=data.get('can_become_limited', False),
+                limited_upgrade_cost=data.get('limited_upgrade_cost', 0),
+                owner_id=data.get('owner_id'),
+                is_limited=data.get('is_limited', False),
+                created_at=created_at
+            )
+        except Exception:
+            return None
+    
+    def _serialize_market_nft(self, market: MarketNFT) -> Dict:
+        return {
+            'nft_id': market.nft_id,
+            'seller_id': market.seller_id,
+            'seller_name': market.seller_name,
+            'price_gold': market.price_gold,
+            'price_premium': market.price_premium,
+            'created_at': market.created_at.isoformat() if market.created_at else None,
+            'is_active': market.is_active
+        }
+    
+    def _deserialize_market_nft(self, data: Dict) -> Optional[MarketNFT]:
+        try:
+            created_at = datetime.now()
+            if data.get('created_at'):
+                try:
+                    created_at = datetime.fromisoformat(data['created_at'])
+                except:
+                    pass
+            return MarketNFT(
+                nft_id=data['nft_id'],
+                seller_id=data['seller_id'],
+                seller_name=data['seller_name'],
+                price_gold=data['price_gold'],
+                price_premium=data['price_premium'],
+                created_at=created_at,
+                is_active=data.get('is_active', True)
+            )
+        except Exception:
+            return None
 
     def _serialize_player(self, player: Player) -> Dict:
         return {
@@ -1454,7 +1936,8 @@ class DataManager:
             'referral_code': player.referral_code,
             'referral_count': player.referral_count,
             'referral_rewards_claimed': player.referral_rewards_claimed,
-            'referral_bonus_multiplier': player.referral_bonus_multiplier
+            'referral_bonus_multiplier': player.referral_bonus_multiplier,
+            'nft_collection': player.nft_collection.copy()
         }
 
     def _deserialize_player(self, data: Dict) -> Optional[Player]:
@@ -1508,10 +1991,11 @@ class DataManager:
             player.last_command_time = data.get('last_command_time', {})
             player.notification_cooldown = data.get('notification_cooldown', 5.0)
             player.referrer_id = data.get('referrer_id')
-            player.referral_code = data.get('referral_code', ''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=6)))
+            player.referral_code = data.get('referral_code', ''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=8)))
             player.referral_count = data.get('referral_count', 0)
             player.referral_rewards_claimed = data.get('referral_rewards_claimed', 0)
             player.referral_bonus_multiplier = data.get('referral_bonus_multiplier', 1.0)
+            player.nft_collection = data.get('nft_collection', [])
             
             material_str = data.get('current_pickaxe_material', 'Деревянная')
             found = False
@@ -1917,6 +2401,22 @@ class DataManager:
                         self.exchange_balances[int(user_id_str)] = balance
                     except:
                         continue
+                
+                for nft_id, nft_data in data.get('nft_items', {}).items():
+                    try:
+                        nft = self._deserialize_nft(nft_data)
+                        if nft:
+                            self.nft_items[nft_id] = nft
+                    except:
+                        continue
+                
+                for market_id, market_data in data.get('market_nft', {}).items():
+                    try:
+                        market = self._deserialize_market_nft(market_data)
+                        if market:
+                            self.market_nft[market_id] = market
+                    except:
+                        continue
 
             self.stats["loads"] += 1
 
@@ -2023,6 +2523,7 @@ class DataManager:
 
         self.create_initial_items()
         self.initialize_promocodes()
+        self.init_nft_items()
         self.save_data()
 
     def create_initial_items(self):
@@ -3714,6 +4215,7 @@ class DataManager:
             total_promocodes_activated = len(self.promocode_activations)
             total_roulette_bets = sum(p.stats.get("roulette_wins", 0) + p.stats.get("roulette_losses", 0) for p in self.players.values())
             total_exchange_orders = len(self.exchange_orders)
+            total_nft = sum(len(p.nft_collection) for p in self.players.values())
             return {
                 "total_players": total_players,
                 "active_today": active_today,
@@ -3726,7 +4228,8 @@ class DataManager:
                 "reincarnations": sum(p.stats.get("times_reset", 0) for p in self.players.values()),
                 "promocodes_activated": total_promocodes_activated,
                 "roulette_bets": total_roulette_bets,
-                "exchange_orders": total_exchange_orders
+                "exchange_orders": total_exchange_orders,
+                "total_nft": total_nft
             }
         except Exception:
             return {}
@@ -3735,18 +4238,19 @@ class DataManager:
         ruby_price = self.ruby_price
         ruby_total = self.ruby_total
         ruby_left = ruby_total - self.limited_item_counter
+        # Увеличенные суммы доната в 1000 раз
         rewards = {
-            1: {"gold": 80, "bonus_percent": 0, "items": []},
-            5: {"gold": 400, "bonus_percent": 10, "items": ["common_case"]},
-            10: {"gold": 850, "bonus_percent": 20, "items": ["rare_case"]},
-            20: {"gold": 1800, "bonus_percent": 30, "items": ["rare_case", "common_fuel"]},
-            50: {"gold": 4500, "bonus_percent": 50, "items": ["epic_case", "advanced_fuel", "random_tool"]},
-            ruby_price: {"gold": 6800, "bonus_percent": 85, "items": ["royal_ruby"]},
-            100: {"gold": 9000, "bonus_percent": 100, "items": ["legendary_case", "premium_fuel", "epic_tool", "random_collectible"]}
+            1: {"gold": 80000, "bonus_percent": 0, "items": []},
+            5: {"gold": 400000, "bonus_percent": 10, "items": ["common_case"]},
+            10: {"gold": 850000, "bonus_percent": 20, "items": ["rare_case"]},
+            20: {"gold": 1800000, "bonus_percent": 30, "items": ["rare_case", "common_fuel"]},
+            50: {"gold": 4500000, "bonus_percent": 50, "items": ["epic_case", "advanced_fuel", "random_tool"]},
+            ruby_price: {"gold": 6800000, "bonus_percent": 85, "items": ["royal_ruby"]},
+            100: {"gold": 9000000, "bonus_percent": 100, "items": ["legendary_case", "premium_fuel", "epic_tool", "random_collectible"]}
         }
         if stars in rewards:
             return rewards[stars]
-        gold = stars * 80
+        gold = stars * 80000
         bonus_percent = min(stars // 2, 80)
         items = []
         if stars >= 50:
@@ -3756,19 +4260,20 @@ class DataManager:
         return {"gold": gold, "bonus_percent": bonus_percent, "items": items}
 
     def get_package_reward(self, package_type: str) -> Dict[str, Any]:
+        # Увеличенные суммы пакетов в 1000 раз
         packages = {
             "starter": {
-                "gold": 5000,
+                "gold": 5000000,
                 "items": ["epic_case", "advanced_fuel"],
                 "description": "Стартовый пакет"
             },
             "business": {
-                "gold": 12000,
+                "gold": 12000000,
                 "items": ["legendary_case", "premium_fuel", "random_tool"],
                 "description": "Промышленный пакет"
             },
             "premium": {
-                "gold": 30000,
+                "gold": 30000000,
                 "items": ["mythic_case", "ultra_fuel", "random_tool", "random_collectible"],
                 "description": "Магнатский пакет"
             }
@@ -3963,9 +4468,9 @@ class DataManager:
                             items_given.append(new_item)
                             self.limited_item_counter += 1
                     else:
-                        player.gold_balance += 20000
-                        total_gold += 20000
-                        items_given.append("Лимит исчерпан, выдано 20000 🪙")
+                        player.gold_balance += 20000000
+                        total_gold += 20000000
+                        items_given.append("Лимит исчерпан, выдано 20000000 🪙")
             asyncio.create_task(self.batch_save())
             result = {
                 "success": True,
@@ -4621,12 +5126,75 @@ class KeyboardManager:
         builder.button(text="🏆 Топ", callback_data="top_players")
         builder.button(text="⭐ Донаты", callback_data="donate")
         builder.button(text="💱 Обменник", callback_data="exchange_menu")
+        builder.button(text="🎨 NFT Коллекция", callback_data="nft_menu")
         builder.button(text="❓ Помощь", callback_data="help")
         builder.adjust(2)
         result = builder.as_markup()
         await KeyboardManager._cache.set(cache_key, result)
         KeyboardManager._menu_cache[cache_key] = result
         return result
+
+    @staticmethod
+    async def nft_menu(player_nft_stats: Dict[str, Any]) -> InlineKeyboardMarkup:
+        builder = InlineKeyboardBuilder()
+        total = player_nft_stats.get("total", 0)
+        limited = player_nft_stats.get("limited", 0)
+        builder.button(text=f"📊 {total} NFT ({limited} лимит)", callback_data="nft_stats")
+        builder.button(text="🛒 Купить NFT", callback_data="nft_buy_menu")
+        builder.button(text="⚡ Улучшить NFT", callback_data="nft_upgrade_menu")
+        builder.button(text="🏪 Рынок NFT", callback_data="nft_market_menu")
+        builder.button(text="⬅️ Назад", callback_data="back_to_main")
+        builder.adjust(1)
+        return builder.as_markup()
+
+    @staticmethod
+    async def nft_buy_menu() -> InlineKeyboardMarkup:
+        builder = InlineKeyboardBuilder()
+        builder.button(text="🏺 Древний меч (50000🪙)", callback_data="nft_buy_ancient_sword")
+        builder.button(text="🐉 Яйцо дракона (100000🪙)", callback_data="nft_buy_dragon_egg")
+        builder.button(text="👑 Кристальная корона (200000🪙)", callback_data="nft_buy_crystal_crown")
+        builder.button(text="⬅️ Назад", callback_data="nft_menu")
+        builder.adjust(1)
+        return builder.as_markup()
+
+    @staticmethod
+    async def nft_upgrade_menu(player_nft_collection: List[str]) -> InlineKeyboardMarkup:
+        builder = InlineKeyboardBuilder()
+        for nft_id in player_nft_collection:
+            if data_manager:
+                nft = data_manager.nft_items.get(nft_id)
+                if nft:
+                    builder.button(text=f"🔨 {nft.name} (ур.{nft.level}/{nft.max_level})", callback_data=f"nft_upgrade_{nft_id}")
+        builder.button(text="⬅️ Назад", callback_data="nft_menu")
+        builder.adjust(1)
+        return builder.as_markup()
+
+    @staticmethod
+    async def nft_market_menu(market_nft: List[MarketNFT]) -> InlineKeyboardMarkup:
+        builder = InlineKeyboardBuilder()
+        for market in market_nft[:10]:
+            nft = data_manager.nft_items.get(market.nft_id) if data_manager else None
+            if nft:
+                price_text = f"{market.price_gold}🪙"
+                if market.price_premium > 0:
+                    price_text += f"/{market.price_premium}💎"
+                builder.button(text=f"{nft.name} - {price_text}", callback_data=f"nft_market_buy_{market.nft_id}_{market.seller_id}")
+        builder.button(text="📤 Выставить NFT", callback_data="nft_sell_menu")
+        builder.button(text="⬅️ Назад", callback_data="nft_menu")
+        builder.adjust(1)
+        return builder.as_markup()
+
+    @staticmethod
+    async def nft_sell_menu(player_nft_collection: List[str]) -> InlineKeyboardMarkup:
+        builder = InlineKeyboardBuilder()
+        for nft_id in player_nft_collection:
+            if data_manager:
+                nft = data_manager.nft_items.get(nft_id)
+                if nft:
+                    builder.button(text=f"📤 {nft.name}", callback_data=f"nft_sell_{nft_id}")
+        builder.button(text="⬅️ Назад", callback_data="nft_market_menu")
+        builder.adjust(1)
+        return builder.as_markup()
 
     @staticmethod
     async def profile_menu(player: Player) -> InlineKeyboardMarkup:
@@ -4778,6 +5346,7 @@ class KeyboardManager:
         builder.button(text="📦 Ящики", callback_data="cases")
         builder.button(text="⚡ Улучшения", callback_data="upgrades")
         builder.button(text="⭐ Донаты", callback_data="donate")
+        builder.button(text="🎨 NFT", callback_data="nft_buy_menu")
         builder.button(text="⬅️ Назад", callback_data="back_to_main")
         builder.adjust(2)
         result = builder.as_markup()
@@ -5018,6 +5587,7 @@ class KeyboardManager:
         builder.button(text="🏺 По коллекциям", callback_data="top_collectibles")
         builder.button(text="🔄 По перерождению", callback_data="top_reincarnation")
         builder.button(text="🎰 По рулетке", callback_data="top_roulette")
+        builder.button(text="🎨 По NFT", callback_data="top_nft")
         builder.button(text="⬅️ Назад", callback_data="back_to_main")
         builder.adjust(1)
         result = builder.as_markup()
@@ -5051,6 +5621,7 @@ class KeyboardManager:
         builder.button(text="🔍 Найти игрока", callback_data="admin_find_player")
         builder.button(text="📋 Все предметы", callback_data="admin_all_items")
         builder.button(text="🪨 Все минералы", callback_data="admin_all_minerals")
+        builder.button(text="🎨 Упр. NFT", callback_data="admin_nft_menu")
         builder.button(text="➕ Добавить канал", callback_data="admin_add_channel")
         builder.button(text="➖ Удалить канал", callback_data="admin_remove_channel")
         builder.button(text="🔧 Проверить каналы", callback_data="admin_check_channels")
@@ -5073,6 +5644,16 @@ class KeyboardManager:
         await KeyboardManager._cache.set(cache_key, result)
         KeyboardManager._menu_cache[cache_key] = result
         return result
+
+    @staticmethod
+    async def admin_nft_menu() -> InlineKeyboardMarkup:
+        builder = InlineKeyboardBuilder()
+        builder.button(text="🎨 Создать NFT", callback_data="admin_nft_create")
+        builder.button(text="📊 Статистика NFT", callback_data="admin_nft_stats")
+        builder.button(text="🎁 Выдать NFT", callback_data="admin_nft_give")
+        builder.button(text="⬅️ Назад", callback_data="admin")
+        builder.adjust(1)
+        return builder.as_markup()
 
     @staticmethod
     async def admin_ruby_settings() -> InlineKeyboardMarkup:
@@ -5118,13 +5699,6 @@ class KeyboardManager:
 
     @staticmethod
     async def exchange_menu(best_buy_rate: Optional[float] = None, best_sell_rate: Optional[float] = None) -> InlineKeyboardMarkup:
-        cache_key = f"exchange_menu_{best_buy_rate}_{best_sell_rate}"
-        if cache_key in KeyboardManager._menu_cache:
-            return KeyboardManager._menu_cache[cache_key]
-        cached = await KeyboardManager._cache.get(cache_key)
-        if cached:
-            KeyboardManager._menu_cache[cache_key] = cached
-            return cached
         builder = InlineKeyboardBuilder()
         buy_text = f"💰 Купить 💎 ({best_buy_rate:.2f} 💎/🪙)" if best_buy_rate else "💰 Купить 💎"
         sell_text = f"💰 Продать 💎 ({best_sell_rate:.2f} 💎/🪙)" if best_sell_rate else "💰 Продать 💎"
@@ -5135,69 +5709,36 @@ class KeyboardManager:
         builder.button(text="⚙️ Управление ордерами", callback_data="exchange_manage")
         builder.button(text="⬅️ Назад", callback_data="back_to_main")
         builder.adjust(2)
-        result = builder.as_markup()
-        await KeyboardManager._cache.set(cache_key, result)
-        KeyboardManager._menu_cache[cache_key] = result
-        return result
+        return builder.as_markup()
 
     @staticmethod
     async def exchange_manage_menu() -> InlineKeyboardMarkup:
-        cache_key = "exchange_manage_menu"
-        if cache_key in KeyboardManager._menu_cache:
-            return KeyboardManager._menu_cache[cache_key]
-        cached = await KeyboardManager._cache.get(cache_key)
-        if cached:
-            KeyboardManager._menu_cache[cache_key] = cached
-            return cached
         builder = InlineKeyboardBuilder()
-        builder.button(text="📈 Изменить курс покупки", callback_data="exchange_set_buy_rate")
-        builder.button(text="📉 Изменить курс продажи", callback_data="exchange_set_sell_rate")
+        builder.button(text="📈 Создать ордер покупки", callback_data="exchange_create_buy")
+        builder.button(text="📉 Создать ордер продажи", callback_data="exchange_create_sell")
         builder.button(text="💎 Пополнить баланс", callback_data="exchange_deposit")
         builder.button(text="💎 Вывести баланс", callback_data="exchange_withdraw")
         builder.button(text="⬅️ Назад", callback_data="exchange_menu")
         builder.adjust(1)
-        result = builder.as_markup()
-        await KeyboardManager._cache.set(cache_key, result)
-        KeyboardManager._menu_cache[cache_key] = result
-        return result
+        return builder.as_markup()
 
     @staticmethod
     async def exchange_deposit_menu() -> InlineKeyboardMarkup:
-        cache_key = "exchange_deposit_menu"
-        if cache_key in KeyboardManager._menu_cache:
-            return KeyboardManager._menu_cache[cache_key]
-        cached = await KeyboardManager._cache.get(cache_key)
-        if cached:
-            KeyboardManager._menu_cache[cache_key] = cached
-            return cached
         builder = InlineKeyboardBuilder()
         builder.button(text="🪙 Пополнить золотом", callback_data="exchange_deposit_gold")
         builder.button(text="💎 Пополнить Premium Coin", callback_data="exchange_deposit_premium")
         builder.button(text="⬅️ Назад", callback_data="exchange_manage")
         builder.adjust(1)
-        result = builder.as_markup()
-        await KeyboardManager._cache.set(cache_key, result)
-        KeyboardManager._menu_cache[cache_key] = result
-        return result
+        return builder.as_markup()
 
     @staticmethod
     async def exchange_withdraw_menu() -> InlineKeyboardMarkup:
-        cache_key = "exchange_withdraw_menu"
-        if cache_key in KeyboardManager._menu_cache:
-            return KeyboardManager._menu_cache[cache_key]
-        cached = await KeyboardManager._cache.get(cache_key)
-        if cached:
-            KeyboardManager._menu_cache[cache_key] = cached
-            return cached
         builder = InlineKeyboardBuilder()
         builder.button(text="🪙 Вывести золото", callback_data="exchange_withdraw_gold")
         builder.button(text="💎 Вывести Premium Coin", callback_data="exchange_withdraw_premium")
         builder.button(text="⬅️ Назад", callback_data="exchange_manage")
         builder.adjust(1)
-        result = builder.as_markup()
-        await KeyboardManager._cache.set(cache_key, result)
-        KeyboardManager._menu_cache[cache_key] = result
-        return result
+        return builder.as_markup()
 
     @staticmethod
     async def back_button(target: str) -> InlineKeyboardMarkup:
@@ -5263,14 +5804,14 @@ class DonateKeyboards:
             DonateKeyboards._menu_cache[cache_key] = cached
             return cached
         builder = InlineKeyboardBuilder()
-        builder.button(text="1 ⭐ - 80 🪙", callback_data="donate_1")
-        builder.button(text="5 ⭐ - 400 🪙", callback_data="donate_5")
-        builder.button(text="10 ⭐ - 850 🪙", callback_data="donate_10")
-        builder.button(text="20 ⭐ - 1800 🪙", callback_data="donate_20")
-        builder.button(text="50 ⭐ - 4500 🪙", callback_data="donate_50")
-        ruby_text = f"{ruby_price} ⭐ - 6800 🪙 (осталось {ruby_left})"
+        builder.button(text="1 ⭐ - 80000 🪙", callback_data="donate_1")
+        builder.button(text="5 ⭐ - 400000 🪙", callback_data="donate_5")
+        builder.button(text="10 ⭐ - 850000 🪙", callback_data="donate_10")
+        builder.button(text="20 ⭐ - 1800000 🪙", callback_data="donate_20")
+        builder.button(text="50 ⭐ - 4500000 🪙", callback_data="donate_50")
+        ruby_text = f"{ruby_price} ⭐ - 6800000 🪙 (осталось {ruby_left})"
         builder.button(text=ruby_text, callback_data=f"donate_{ruby_price}")
-        builder.button(text="100 ⭐ - 9000 🪙", callback_data="donate_100")
+        builder.button(text="100 ⭐ - 9000000 🪙", callback_data="donate_100")
         builder.button(text="🎁 Спецнаборы", callback_data="donate_special")
         builder.button(text="🎁 Промокоды", callback_data="promocode_info")
         builder.button(text="ℹ️ Поддержка", callback_data="donate_help")
@@ -5359,6 +5900,7 @@ class TextTemplates:
 🎰 Новая игра: /rul красное 100 - ставка на красное
 🎁 Используйте промокоды: /promocode
 💱 Обменник: /exchange - покупайте и продавайте Premium Coin!
+🎨 NFT Коллекция: покупайте и улучшайте уникальные NFT предметы!
 
 🚀 Начните с /mine или используйте кнопки ниже!
 """
@@ -5391,6 +5933,7 @@ class TextTemplates:
         if donate_discount > 0:
             discounts_text += f"🎁 Скидка на донат: {donate_discount}%\n"
         market_items = len(player.market_offers) if hasattr(player, 'market_offers') else 0
+        nft_stats = data_manager.get_player_nft_stats(player.user_id) if data_manager else {}
         return f"""
 👤 Профиль: {player.custom_name}
 🆔 ID: {player.player_id_str} | #{player.player_number}
@@ -5401,6 +5944,7 @@ class TextTemplates:
 🔄 Перерождений: {player.reincarnation_level} (x{player.reincarnation_multiplier:.1f} доход)
 🎒 Предметов: {len(player.inventory)} | 🏆 Коллекц.: {collectibles_stats['total']}
 🏪 На рынке: {market_items}
+🎨 NFT: {nft_stats.get('total', 0)} ({nft_stats.get('limited', 0)} лимит)
 ⛽ Топливо: {player.fuel} мин.
 ⛏️ Статус: {mining_status}
 🎁 Рефералов: {player.referral_count} (x{player.referral_bonus_multiplier:.2f} множитель)
@@ -5460,10 +6004,11 @@ class TextTemplates:
 
     @staticmethod
     def referral_info(player: Player) -> str:
+        referral_link = f"https://t.me/{BOT_USERNAME.lstrip('@')}?start={player.referral_code}"
         return f"""
 🎁 РЕФЕРАЛЬНАЯ СИСТЕМА
 
-Ваш реферальный код: `{player.referral_code}`
+Ваша реферальная ссылка: {referral_link}
 
 📊 Статистика:
 • Приглашено: {player.referral_count}
@@ -5471,16 +6016,39 @@ class TextTemplates:
 • Наград получено: {player.referral_rewards_claimed} 🪙
 
 💡 Как это работает:
-1. Поделитесь своим кодом: {BOT_USERNAME}?start={player.referral_code}
+1. Поделитесь своей ссылкой с друзьями
 2. Когда друг начнет игру, вы получите бонус!
 3. Каждый новый реферал увеличивает ваш множитель дохода
 
 💰 Награды:
-• За 1 реферала: 500 🪙
-• За 5 рефералов: + Мифический ящик
-• За 10 рефералов: + Королевский рубин
-• За 20 рефералов: + 10% к множителю
+• За 1 реферала: 500000 🪙
+• За 5 рефералов: + Мифический ящик + 2500000 🪙
+• За 10 рефералов: + Королевский рубин + 5000000 🪙
+• За 20 рефералов: + 10% к множителю + 10000000 🪙
 """
+
+    @staticmethod
+    def nft_info(nft: NFTItem) -> str:
+        text = f"""
+🎨 {nft.name}
+🌟 {nft.rarity.value}
+📝 {nft.description}
+📊 Уровень: {nft.level}/{nft.max_level}
+
+📈 Характеристики:
+"""
+        for stat_name, stat_value in nft.stats.items():
+            text += f"  • {stat_name}: +{stat_value}\n"
+        text += f"""
+💰 Стоимость улучшения:
+• Золотом: {nft.upgrade_cost_gold} 🪙
+• Premium Coin: {nft.upgrade_cost_premium} 💎
+"""
+        if nft.can_become_limited:
+            text += f"👑 Превращение в лимитированный: {nft.limited_upgrade_cost} 💎\n"
+        if nft.is_limited:
+            text += "✨ ЛИМИТИРОВАННЫЙ ✨\n"
+        return text
 
     @staticmethod
     def mining_status(session: MiningSession) -> str:
@@ -5703,6 +6271,9 @@ class TextTemplates:
         elif top_type == "roulette":
             title = "🎰 Топ по рулетке"
             items = [f"{i+1}. {name} - {value} 🪙 прибыли (Ур.{level})" for i, (name, value, level) in enumerate(top_list)]
+        elif top_type == "nft":
+            title = "🎨 Топ по NFT"
+            items = [f"{i+1}. {name} - {value} NFT (Ур.{level})" for i, (name, value, level) in enumerate(top_list)]
         else:
             return "❌ Неизвестный тип"
         return f"{title}\n\n" + "\n".join(items)
@@ -5725,6 +6296,7 @@ class TextTemplates:
 🎁 Промокодов активировано: {stats.get('promocodes_activated', 0)}
 🎰 Ставок в рулетке: {stats.get('roulette_bets', 0)}
 💱 Ордеров в обменнике: {stats.get('exchange_orders', 0)}
+🎨 NFT в системе: {stats.get('total_nft', 0)}
 """
 
     @staticmethod
@@ -5767,13 +6339,13 @@ class TextTemplates:
 Ваша поддержка помогает развивать игру!
 
 🪙 За донаты вы получаете золото:
-• 1 ⭐ = 80 🪙
-• 5 ⭐ = 400 🪙
-• 10 ⭐ = 850 🪙
-• 20 ⭐ = 1800 🪙
-• 50 ⭐ = 4500 🪙
-• {ruby_price} ⭐ = 6800 🪙 + Королевский рубин (осталось {ruby_left})
-• 100 ⭐ = 9000 🪙
+• 1 ⭐ = 80000 🪙
+• 5 ⭐ = 400000 🪙
+• 10 ⭐ = 850000 🪙
+• 20 ⭐ = 1800000 🪙
+• 50 ⭐ = 4500000 🪙
+• {ruby_price} ⭐ = 6800000 🪙 + Королевский рубин (осталось {ruby_left})
+• 100 ⭐ = 9000000 🪙
 
 🎁 Также есть спецнаборы!
 🎁 Используйте промокоды для скидок! /promocode
@@ -5785,19 +6357,19 @@ class TextTemplates:
 🎁 Спецнаборы:
 
 🪨 Стартовый (50 ⭐):
-5000🪙 + эпик ящ + топливо 180мин
+5000000🪙 + эпик ящ + топливо 180мин
 
 ⚡ Промышленный (100 ⭐):
-12000🪙 + легенд ящ + топливо 300мин + эпик инструмент
+12000000🪙 + легенд ящ + топливо 300мин + эпик инструмент
 
 👑 Магнатский (200 ⭐):
-30000🪙 + миф ящ + топливо 600мин + легенд инструмент
+30000000🪙 + миф ящ + топливо 600мин + легенд инструмент
 
 🤖 Автодобыча (50 ⭐):
-4400🪙 + топливо 180/300мин
+4400000🪙 + топливо 180/300мин
 
 🏺 Коллекционный (100 ⭐):
-10000🪙 + эпик/легенд ящ + случ. коллекция
+10000000🪙 + эпик/легенд ящ + случ. коллекция
 """
 
     @staticmethod
@@ -5885,6 +6457,7 @@ class TextTemplates:
 /promocode [код] - Активация промокода
 /exchange - Обменник Premium Coin
 /referral - Реферальная система
+/nft - NFT коллекция
 /help - Справка
 
 🎰 Рулетка:
@@ -5902,6 +6475,11 @@ class TextTemplates:
 • /exchange - открыть обменник Premium Coin
 • Покупайте и продавайте Premium Coin по выгодным курсам
 • Создавайте свои ордера на покупку/продажу
+
+🎨 NFT Коллекция:
+• /nft - просмотр ваших NFT
+• Покупайте и улучшайте уникальные предметы
+• Превращайте обычные NFT в лимитированные
 
 📞 По вопросам: {ADMIN_USERNAME}
 """
@@ -6111,6 +6689,8 @@ class TextTemplates:
 
 data_manager: Optional[DataManager] = None
 bot_instance = None
+RATE_LIMIT_WINDOW = 60
+MAX_ACTIONS_PER_WINDOW = 30
 
 class MinerichBot:
     def __init__(self, token: str):
@@ -6142,7 +6722,7 @@ class MinerichBot:
                     player = data_manager.players.get(user_id)
                 
                 if player and player.can_send_notification():
-                    await self.safe_send_message(user_id, text, parse_mode=ParseMode.MARKDOWN)
+                    await self.safe_send_message(user_id, text, parse_mode=ParseMode,MARKDOWN)
                 
                 await asyncio.sleep(BATCH_SEND_DELAY)
             except Exception:
@@ -6297,6 +6877,43 @@ class MinerichBot:
                 )
             except Exception:
                 await message.answer("❌ Ошибка!")
+        
+        @self.dp.message(Command("nft"))
+        async def cmd_nft(message: Message):
+            try:
+                if not await self.check_rate_limit(message.from_user.id):
+                    await message.answer("⏳ Слишком много запросов. Подождите немного.")
+                    return
+                can_use, wait = self.check_cooldown(message.from_user.id, "nft")
+                if not can_use:
+                    await message.answer(f"⏳ Слишком быстро! Подождите {wait:.1f} сек.")
+                    return
+                if not data_manager:
+                    await message.answer("❌ Ошибка сервера")
+                    return
+                player = data_manager.get_or_create_player(
+                    message.from_user.id,
+                    message.from_user.username or "",
+                    message.from_user.first_name or "Шахтёр"
+                )
+                if not player:
+                    await message.answer("❌ Вы забанены.")
+                    return
+                
+                nft_stats = data_manager.get_player_nft_stats(message.from_user.id)
+                
+                await self.safe_send_message(
+                    message.chat.id,
+                    f"🎨 ВАША NFT КОЛЛЕКЦИЯ\n\n"
+                    f"📊 Всего NFT: {nft_stats.get('total', 0)}\n"
+                    f"👑 Лимитированных: {nft_stats.get('limited', 0)}\n\n"
+                    f"📈 Активные бонусы:\n" + 
+                    "\n".join([f"  • {stat}: +{value}" for stat, value in nft_stats.get('bonus', {}).items()]) if nft_stats.get('bonus') else "  • Нет активных бонусов",
+                    reply_markup=await self.keyboard_manager.nft_menu(nft_stats),
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            except Exception:
+                await message.answer("❌ Произошла ошибка. Попробуйте позже.")
         
         @self.dp.message(Command("donate"))
         async def cmd_donate(message: Message):
@@ -6856,6 +7473,9 @@ class MinerichBot:
 🎁 Предметы:
 /ai @user название - выдать предмет (только существующие в системе)
 
+🎨 NFT:
+/anft @user nft_id - выдать NFT
+
 🚫 Баны:
 /aban @user причина - забанить
 /aunban @user - разбанить
@@ -6912,28 +7532,10 @@ class MinerichBot:
                     await message.answer("❌ Вы забанены.")
                     return
                 
-                limited_gifts = [
-                    {"name": "🎁 Новогодний набор", "price": 10000, "items": ["🎄 Снежинка", "❄️ Ледяная кирка"]},
-                    {"name": "🎉 Юбилейный пакет", "price": 50000, "items": ["🎂 Праздничный торт", "🎈 Воздушный шар"]},
-                    {"name": "👑 Королевская коллекция", "price": 100000, "items": ["👑 Корона", "🏰 Замок"]},
-                    {"name": "🎃 Хэллоуинский сюрприз", "price": 75000, "items": ["🎃 Тыква", "🦇 Летучая мышь"]},
-                ]
-                
-                text = "🛒 ЛИМИТИРОВАННЫЕ ПОДАРКИ\n\n"
-                
-                builder = InlineKeyboardBuilder()
-                for i, gift in enumerate(limited_gifts, 1):
-                    text += f"{i}. {gift['name']} - {gift['price']} 🪙\n"
-                    text += f"   Содержит: {', '.join(gift['items'])}\n\n"
-                    builder.button(text=f"{i}. {gift['name']}", callback_data=f"market_gift_{i}")
-                
-                builder.button(text="⬅️ Назад", callback_data="back_to_main")
-                builder.adjust(1)
-                
                 await self.safe_send_message(
                     message.chat.id,
-                    text,
-                    reply_markup=builder.as_markup(),
+                    self.text_templates.market_info(),
+                    reply_markup=await self.keyboard_manager.market_menu(data_manager.market_offers, data_manager.items),
                     parse_mode=ParseMode.MARKDOWN
                 )
             except Exception:
@@ -6986,6 +7588,36 @@ class MinerichBot:
                     return
                 success, msg = data_manager.give_item(player.user_id, item_name)
                 await message.answer(msg)
+            except Exception:
+                await message.answer(f"❌ Ошибка")
+
+        @self.dp.message(Command("anft"))
+        async def admin_quick_give_nft(message: Message):
+            if message.from_user.id != ADMIN_ID:
+                return
+            try:
+                parts = message.text.split(maxsplit=2)
+                if len(parts) < 3:
+                    await message.answer("❌ Использование: /anft @user nft_id")
+                    return
+                username = parts[1].replace('@', '')
+                nft_id = parts[2]
+                if not data_manager:
+                    await message.answer("❌ Ошибка сервера")
+                    return
+                player = data_manager.search_player(username)
+                if not player:
+                    await message.answer("❌ Игрок не найден")
+                    return
+                if nft_id not in data_manager.nft_items:
+                    await message.answer("❌ NFT не найден")
+                    return
+                if nft_id not in player.nft_collection:
+                    player.nft_collection.append(nft_id)
+                    await data_manager.batch_save()
+                    await message.answer(f"✅ NFT {data_manager.nft_items[nft_id].name} выдан {player.custom_name}")
+                else:
+                    await message.answer("❌ У игрока уже есть этот NFT")
             except Exception:
                 await message.answer(f"❌ Ошибка")
 
@@ -7313,103 +7945,337 @@ class MinerichBot:
                     del self.user_states[message.from_user.id]
                     await message.answer("⏱️ Время ожидания истекло. Начните заново.")
                     return
-                if state["action"] == "change_name" and state["step"] == "enter_name":
-                    new_name = message.text.strip()
-                    if not data_manager:
-                        await message.answer("❌ Ошибка сервера")
-                        del self.user_states[message.from_user.id]
-                        return
-                    player = data_manager.players.get(message.from_user.id)
-                    if not player:
-                        del self.user_states[message.from_user.id]
-                        return
-                    success, msg = data_manager.set_player_custom_name(message.from_user.id, new_name)
-                    if success:
+                
+                # Обработка ввода для обменника и NFT
+                if state["action"] == "exchange_buy" and state["step"] == "enter_amount":
+                    try:
+                        amount = int(message.text.strip())
+                        order_id = state.get("order_id")
+                        rate = state.get("rate")
+                        if not order_id:
+                            await message.answer("❌ Ошибка")
+                            del self.user_states[message.from_user.id]
+                            return
+                        order = data_manager.exchange_orders.get(order_id)
+                        if not order or not order.is_active or order.balance <= 0:
+                            await message.answer("❌ Ордер больше не активен")
+                            del self.user_states[message.from_user.id]
+                            return
+                        if amount > order.balance:
+                            await message.answer(f"❌ Доступно только {order.balance} 💎")
+                            return
+                        player = data_manager.players.get(message.from_user.id)
+                        if not player:
+                            await message.answer("❌ Игрок не найден")
+                            del self.user_states[message.from_user.id]
+                            return
+                        cost = int(amount * rate)
+                        if player.gold_balance < cost:
+                            await message.answer(f"❌ Недостаточно золота! Нужно: {cost} 🪙")
+                            return
+                        player.gold_balance -= cost
+                        player.premium_coin_balance += amount
+                        order.balance -= amount
+                        balance = data_manager.exchange_balances[message.from_user.id]
+                        balance.gold -= cost
+                        if order.balance <= 0:
+                            order.is_active = False
+                        await data_manager.batch_save()
                         await self.safe_send_message(
                             message.chat.id,
-                            f"✅ {msg}",
-                            reply_markup=await self.keyboard_manager.profile_menu(player),
+                            f"✅ Куплено {amount} 💎 за {cost} 🪙!\n\nТекущий баланс: {player.gold_balance} 🪙, {player.premium_coin_balance} 💎",
+                            reply_markup=await self.keyboard_manager.exchange_menu(*data_manager.get_best_rates()),
                             parse_mode=ParseMode.MARKDOWN
                         )
-                    else:
-                        await message.answer(f"❌ {msg}")
-                    del self.user_states[message.from_user.id]
-                elif state["action"] == "create_offer" and state["step"] == "select_item":
-                    try:
-                        item_index = int(message.text.strip()) - 1
-                        if "tradable_items" not in state or item_index < 0 or item_index >= len(state["tradable_items"]):
-                            await message.answer("❌ Неверный номер. Попробуйте снова.")
-                            return
-                        selected_item_id = state["tradable_items"][item_index]
-                        state["selected_item"] = selected_item_id
-                        state["step"] = "enter_price"
-                        if not data_manager:
-                            await message.answer("❌ Ошибка сервера")
-                            del self.user_states[message.from_user.id]
-                            return
-                        item = data_manager.get_item(selected_item_id)
-                        item_name = item.name if item else "предмет"
-                        await message.answer(f"Введите цену для {item_name} в золоте (макс 800000):")
+                        del self.user_states[message.from_user.id]
                     except ValueError:
-                        await message.answer("❌ Введите номер предмета цифрой")
-                elif state["action"] == "create_offer" and state["step"] == "enter_price":
+                        await message.answer("❌ Введите число")
+                    return
+                
+                elif state["action"] == "exchange_sell" and state["step"] == "enter_amount":
                     try:
-                        price = int(message.text.strip())
-                        selected_item_id = state.get("selected_item")
-                        if not selected_item_id:
-                            await message.answer("❌ Ошибка выбора предмета")
+                        amount = int(message.text.strip())
+                        order_id = state.get("order_id")
+                        rate = state.get("rate")
+                        if not order_id:
+                            await message.answer("❌ Ошибка")
                             del self.user_states[message.from_user.id]
+                            return
+                        order = data_manager.exchange_orders.get(order_id)
+                        if not order or not order.is_active or order.balance <= 0:
+                            await message.answer("❌ Ордер больше не активен")
+                            del self.user_states[message.from_user.id]
+                            return
+                        if amount > order.balance:
+                            await message.answer(f"❌ Доступно только {order.balance} 💎")
+                            return
+                        player = data_manager.players.get(message.from_user.id)
+                        if not player:
+                            await message.answer("❌ Игрок не найден")
+                            del self.user_states[message.from_user.id]
+                            return
+                        if player.premium_coin_balance < amount:
+                            await message.answer(f"❌ Недостаточно Premium Coin! Нужно: {amount} 💎")
+                            return
+                        gold_amount = int(amount * rate)
+                        player.premium_coin_balance -= amount
+                        player.gold_balance += gold_amount
+                        order.balance -= amount
+                        balance = data_manager.exchange_balances[message.from_user.id]
+                        balance.premium -= amount
+                        if order.balance <= 0:
+                            order.is_active = False
+                        await data_manager.batch_save()
+                        await self.safe_send_message(
+                            message.chat.id,
+                            f"✅ Продано {amount} 💎 за {gold_amount} 🪙!\n\nТекущий баланс: {player.gold_balance} 🪙, {player.premium_coin_balance} 💎",
+                            reply_markup=await self.keyboard_manager.exchange_menu(*data_manager.get_best_rates()),
+                            parse_mode=ParseMode.MARKDOWN
+                        )
+                        del self.user_states[message.from_user.id]
+                    except ValueError:
+                        await message.answer("❌ Введите число")
+                    return
+                
+                elif state["action"] == "exchange_set_buy_rate" and state["step"] == "enter_rate":
+                    try:
+                        rate = float(message.text.strip())
+                        if rate <= 0:
+                            await message.answer("❌ Курс должен быть положительным")
+                            return
+                        await self.safe_send_message(
+                            message.chat.id,
+                            f"📈 Введите сумму Premium Coin, которую хотите купить по курсу {rate}:",
+                            reply_markup=await self.keyboard_manager.cancel_button("exchange_manage"),
+                            parse_mode=ParseMode.MARKDOWN
+                        )
+                        state["step"] = "enter_amount"
+                        state["rate"] = rate
+                        state["order_type"] = "buy"
+                    except ValueError:
+                        await message.answer("❌ Введите число")
+                    return
+                
+                elif state["action"] == "exchange_set_buy_rate" and state["step"] == "enter_amount":
+                    try:
+                        amount = int(message.text.strip())
+                        rate = state.get("rate")
+                        if amount <= 0:
+                            await message.answer("❌ Сумма должна быть положительной")
                             return
                         if not data_manager:
                             await message.answer("❌ Ошибка сервера")
                             del self.user_states[message.from_user.id]
                             return
-                        success, msg = data_manager.create_market_offer(message.from_user.id, selected_item_id, price)
-                        player = data_manager.players.get(message.from_user.id)
+                        success, msg = data_manager.create_exchange_order(message.from_user.id, "buy", rate, amount)
                         if success:
                             await self.safe_send_message(
                                 message.chat.id,
-                                f"✅ {msg}",
-                                reply_markup=await self.keyboard_manager.market_menu(data_manager.market_offers, data_manager.items),
+                                msg,
+                                reply_markup=await self.keyboard_manager.exchange_menu(*data_manager.get_best_rates()),
                                 parse_mode=ParseMode.MARKDOWN
                             )
                         else:
                             await message.answer(f"❌ {msg}")
                         del self.user_states[message.from_user.id]
                     except ValueError:
-                        await message.answer("❌ Введите цену цифрой")
-                elif state["action"] == "transfer_gold":
-                    if state["step"] == "enter_username":
-                        state["to_username"] = message.text.strip()
+                        await message.answer("❌ Введите число")
+                    return
+                
+                elif state["action"] == "exchange_set_sell_rate" and state["step"] == "enter_rate":
+                    try:
+                        rate = float(message.text.strip())
+                        if rate <= 0:
+                            await message.answer("❌ Курс должен быть положительным")
+                            return
+                        await self.safe_send_message(
+                            message.chat.id,
+                            f"📉 Введите сумму Premium Coin, которую хотите продать по курсу {rate}:",
+                            reply_markup=await self.keyboard_manager.cancel_button("exchange_manage"),
+                            parse_mode=ParseMode.MARKDOWN
+                        )
                         state["step"] = "enter_amount"
-                        await message.answer("Введите сумму для перевода:")
-                    elif state["step"] == "enter_amount":
-                        try:
-                            amount = int(message.text.strip())
-                            to_username = state.get("to_username")
-                            if not to_username:
-                                await message.answer("❌ Ошибка")
-                                del self.user_states[message.from_user.id]
-                                return
-                            if not data_manager:
-                                await message.answer("❌ Ошибка сервера")
-                                del self.user_states[message.from_user.id]
-                                return
-                            success, msg, sent_amount, fee = data_manager.transfer_gold(
-                                message.from_user.id, to_username, amount
-                            )
-                            if success:
-                                await self.safe_send_message(
-                                    message.chat.id,
-                                    self.text_templates.transfer_success(sent_amount, to_username, fee),
-                                    reply_markup=await self.keyboard_manager.main_menu(),
-                                    parse_mode=ParseMode.MARKDOWN
-                                )
-                            else:
-                                await message.answer(f"❌ {msg}")
+                        state["rate"] = rate
+                        state["order_type"] = "sell"
+                    except ValueError:
+                        await message.answer("❌ Введите число")
+                    return
+                
+                elif state["action"] == "exchange_set_sell_rate" and state["step"] == "enter_amount":
+                    try:
+                        amount = int(message.text.strip())
+                        rate = state.get("rate")
+                        if amount <= 0:
+                            await message.answer("❌ Сумма должна быть положительной")
+                            return
+                        if not data_manager:
+                            await message.answer("❌ Ошибка сервера")
                             del self.user_states[message.from_user.id]
-                        except ValueError:
-                            await message.answer("❌ Введите сумму цифрой")
+                            return
+                        success, msg = data_manager.create_exchange_order(message.from_user.id, "sell", rate, amount)
+                        if success:
+                            await self.safe_send_message(
+                                message.chat.id,
+                                msg,
+                                reply_markup=await self.keyboard_manager.exchange_menu(*data_manager.get_best_rates()),
+                                parse_mode=ParseMode.MARKDOWN
+                            )
+                        else:
+                            await message.answer(f"❌ {msg}")
+                        del self.user_states[message.from_user.id]
+                    except ValueError:
+                        await message.answer("❌ Введите число")
+                    return
+                
+                elif state["action"] == "exchange_deposit_gold" and state["step"] == "enter_amount":
+                    try:
+                        amount = int(message.text.strip())
+                        if amount <= 0:
+                            await message.answer("❌ Сумма должна быть положительной")
+                            return
+                        if not data_manager:
+                            await message.answer("❌ Ошибка сервера")
+                            del self.user_states[message.from_user.id]
+                            return
+                        success, msg = data_manager.deposit_exchange_balance(message.from_user.id, "gold", amount)
+                        if success:
+                            await self.safe_send_message(
+                                message.chat.id,
+                                msg,
+                                reply_markup=await self.keyboard_manager.exchange_manage_menu(),
+                                parse_mode=ParseMode.MARKDOWN
+                            )
+                        else:
+                            await message.answer(f"❌ {msg}")
+                        del self.user_states[message.from_user.id]
+                    except ValueError:
+                        await message.answer("❌ Введите число")
+                    return
+                
+                elif state["action"] == "exchange_deposit_premium" and state["step"] == "enter_amount":
+                    try:
+                        amount = int(message.text.strip())
+                        if amount <= 0:
+                            await message.answer("❌ Сумма должна быть положительной")
+                            return
+                        if not data_manager:
+                            await message.answer("❌ Ошибка сервера")
+                            del self.user_states[message.from_user.id]
+                            return
+                        success, msg = data_manager.deposit_exchange_balance(message.from_user.id, "premium", amount)
+                        if success:
+                            await self.safe_send_message(
+                                message.chat.id,
+                                msg,
+                                reply_markup=await self.keyboard_manager.exchange_manage_menu(),
+                                parse_mode=ParseMode.MARKDOWN
+                            )
+                        else:
+                            await message.answer(f"❌ {msg}")
+                        del self.user_states[message.from_user.id]
+                    except ValueError:
+                        await message.answer("❌ Введите число")
+                    return
+                
+                elif state["action"] == "exchange_withdraw_gold" and state["step"] == "enter_amount":
+                    try:
+                        amount = int(message.text.strip())
+                        if amount <= 0:
+                            await message.answer("❌ Сумма должна быть положительной")
+                            return
+                        if not data_manager:
+                            await message.answer("❌ Ошибка сервера")
+                            del self.user_states[message.from_user.id]
+                            return
+                        success, msg = data_manager.withdraw_exchange_balance(message.from_user.id, "gold", amount)
+                        if success:
+                            await self.safe_send_message(
+                                message.chat.id,
+                                msg,
+                                reply_markup=await self.keyboard_manager.exchange_manage_menu(),
+                                parse_mode=ParseMode.MARKDOWN
+                            )
+                        else:
+                            await message.answer(f"❌ {msg}")
+                        del self.user_states[message.from_user.id]
+                    except ValueError:
+                        await message.answer("❌ Введите число")
+                    return
+                
+                elif state["action"] == "exchange_withdraw_premium" and state["step"] == "enter_amount":
+                    try:
+                        amount = int(message.text.strip())
+                        if amount <= 0:
+                            await message.answer("❌ Сумма должна быть положительной")
+                            return
+                        if not data_manager:
+                            await message.answer("❌ Ошибка сервера")
+                            del self.user_states[message.from_user.id]
+                            return
+                        success, msg = data_manager.withdraw_exchange_balance(message.from_user.id, "premium", amount)
+                        if success:
+                            await self.safe_send_message(
+                                message.chat.id,
+                                msg,
+                                reply_markup=await self.keyboard_manager.exchange_manage_menu(),
+                                parse_mode=ParseMode.MARKDOWN
+                            )
+                        else:
+                            await message.answer(f"❌ {msg}")
+                        del self.user_states[message.from_user.id]
+                    except ValueError:
+                        await message.answer("❌ Введите число")
+                    return
+                
+                elif state["action"] == "nft_sell" and state["step"] == "enter_price_gold":
+                    try:
+                        price_gold = int(message.text.strip())
+                        nft_id = state.get("nft_id")
+                        if price_gold < 0:
+                            await message.answer("❌ Цена не может быть отрицательной")
+                            return
+                        await self.safe_send_message(
+                            message.chat.id,
+                            "Введите цену в Premium Coin (или 0, если не хотите продавать за Premium Coin):",
+                            reply_markup=await self.keyboard_manager.cancel_button("nft_market_menu"),
+                            parse_mode=ParseMode.MARKDOWN
+                        )
+                        state["step"] = "enter_price_premium"
+                        state["price_gold"] = price_gold
+                    except ValueError:
+                        await message.answer("❌ Введите число")
+                    return
+                
+                elif state["action"] == "nft_sell" and state["step"] == "enter_price_premium":
+                    try:
+                        price_premium = int(message.text.strip())
+                        nft_id = state.get("nft_id")
+                        price_gold = state.get("price_gold", 0)
+                        if price_premium < 0:
+                            await message.answer("❌ Цена не может быть отрицательной")
+                            return
+                        if price_gold == 0 and price_premium == 0:
+                            await message.answer("❌ Укажите хотя бы одну цену")
+                            return
+                        if not data_manager:
+                            await message.answer("❌ Ошибка сервера")
+                            del self.user_states[message.from_user.id]
+                            return
+                        success, msg = data_manager.create_market_nft(message.from_user.id, nft_id, price_gold, price_premium)
+                        if success:
+                            await self.safe_send_message(
+                                message.chat.id,
+                                msg,
+                                reply_markup=await self.keyboard_manager.nft_market_menu(data_manager.list_market_nft()),
+                                parse_mode=ParseMode.MARKDOWN
+                            )
+                        else:
+                            await message.answer(f"❌ {msg}")
+                        del self.user_states[message.from_user.id]
+                    except ValueError:
+                        await message.answer("❌ Введите число")
+                    return
+                
                 elif message.from_user.id == ADMIN_ID:
                     if state["action"] == "find_player" and state["step"] == "enter_query":
                         query = message.text.strip()
@@ -7428,11 +8294,109 @@ class MinerichBot:
                                 f"Уровень: {player.miner_level}\n"
                                 f"Золото: {player.gold_balance} 🪙\n"
                                 f"Предметов: {len(player.inventory)}\n"
+                                f"NFT: {len(player.nft_collection)}\n"
                                 f"🚫 Бан: {'Да' if player.is_banned else 'Нет'}",
                                 reply_markup=await self.keyboard_manager.admin_back_button()
                             )
                         else:
                             await message.answer("❌ Игрок не найден")
+                        del self.user_states[message.from_user.id]
+                    elif state["action"] == "admin_nft_create" and state["step"] == "enter_name":
+                        state["nft_name"] = message.text.strip()
+                        state["step"] = "enter_type"
+                        await message.answer("Введите тип NFT (ARTIFACT, WEAPON, ARMOR, PET, MOUNT, TITLE):")
+                    elif state["action"] == "admin_nft_create" and state["step"] == "enter_type":
+                        type_str = message.text.strip().upper()
+                        try:
+                            nft_type = NFTItemType[type_str]
+                            state["nft_type"] = nft_type
+                            state["step"] = "enter_rarity"
+                            await message.answer("Введите редкость (COMMON, RARE, EPIC, LEGENDARY, MYTHIC, LIMITED):")
+                        except KeyError:
+                            await message.answer("❌ Неверный тип. Доступные: ARTIFACT, WEAPON, ARMOR, PET, MOUNT, TITLE")
+                    elif state["action"] == "admin_nft_create" and state["step"] == "enter_rarity":
+                        rarity_str = message.text.strip().upper()
+                        try:
+                            nft_rarity = NFTItemRarity[rarity_str]
+                            state["nft_rarity"] = nft_rarity
+                            state["step"] = "enter_description"
+                            await message.answer("Введите описание NFT:")
+                        except KeyError:
+                            await message.answer("❌ Неверная редкость. Доступные: COMMON, RARE, EPIC, LEGENDARY, MYTHIC, LIMITED")
+                    elif state["action"] == "admin_nft_create" and state["step"] == "enter_description":
+                        description = message.text.strip()
+                        state["nft_description"] = description
+                        state["step"] = "enter_stats"
+                        await message.answer("Введите статы в формате: attack=10,mining_bonus=0.2 (через запятую):")
+                    elif state["action"] == "admin_nft_create" and state["step"] == "enter_stats":
+                        stats_text = message.text.strip()
+                        stats = {}
+                        try:
+                            for part in stats_text.split(","):
+                                if "=" in part:
+                                    key, value = part.split("=")
+                                    stats[key.strip()] = float(value.strip())
+                            state["nft_stats"] = stats
+                            state["step"] = "enter_upgrade_cost"
+                            await message.answer("Введите стоимость улучшения в золоте:")
+                        except Exception:
+                            await message.answer("❌ Неверный формат. Используйте: attack=10,mining_bonus=0.2")
+                    elif state["action"] == "admin_nft_create" and state["step"] == "enter_upgrade_cost":
+                        try:
+                            upgrade_cost_gold = int(message.text.strip())
+                            state["upgrade_cost_gold"] = upgrade_cost_gold
+                            state["step"] = "enter_premium_cost"
+                            await message.answer("Введите стоимость улучшения в Premium Coin:")
+                        except ValueError:
+                            await message.answer("❌ Введите число")
+                    elif state["action"] == "admin_nft_create" and state["step"] == "enter_premium_cost":
+                        try:
+                            upgrade_cost_premium = int(message.text.strip())
+                            state["upgrade_cost_premium"] = upgrade_cost_premium
+                            state["step"] = "enter_limited_cost"
+                            await message.answer("Введите стоимость превращения в лимитированный (Premium Coin):")
+                        except ValueError:
+                            await message.answer("❌ Введите число")
+                    elif state["action"] == "admin_nft_create" and state["step"] == "enter_limited_cost":
+                        try:
+                            limited_cost = int(message.text.strip())
+                            nft_id = f"nft_{state['nft_name'].lower().replace(' ', '_')}_{random.randint(1000, 9999)}"
+                            new_nft = NFTItem(
+                                nft_id=nft_id,
+                                name=state["nft_name"],
+                                item_type=state["nft_type"],
+                                rarity=state["nft_rarity"],
+                                description=state["nft_description"],
+                                stats=state["nft_stats"],
+                                upgrade_cost_gold=state["upgrade_cost_gold"],
+                                upgrade_cost_premium=state["upgrade_cost_premium"],
+                                limited_upgrade_cost=limited_cost,
+                                is_upgradable=True,
+                                can_become_limited=True
+                            )
+                            data_manager.nft_items[nft_id] = new_nft
+                            await data_manager.batch_save()
+                            await message.answer(f"✅ NFT {state['nft_name']} создан! ID: {nft_id}")
+                            del self.user_states[message.from_user.id]
+                        except Exception:
+                            await message.answer("❌ Ошибка")
+                            del self.user_states[message.from_user.id]
+                    elif state["action"] == "admin_nft_give" and state["step"] == "enter_username":
+                        state["target_username"] = message.text.strip()
+                        state["step"] = "enter_nft_id"
+                        await message.answer("Введите ID NFT:")
+                    elif state["action"] == "admin_nft_give" and state["step"] == "enter_nft_id":
+                        nft_id = message.text.strip()
+                        player = data_manager.search_player(state["target_username"])
+                        if player and nft_id in data_manager.nft_items:
+                            if nft_id not in player.nft_collection:
+                                player.nft_collection.append(nft_id)
+                                await data_manager.batch_save()
+                                await message.answer(f"✅ NFT {data_manager.nft_items[nft_id].name} выдан {player.custom_name}")
+                            else:
+                                await message.answer("❌ У игрока уже есть этот NFT")
+                        else:
+                            await message.answer("❌ Игрок или NFT не найдены")
                         del self.user_states[message.from_user.id]
                     elif state["action"] == "add_channel":
                         if state["step"] == "enter_name":
@@ -7780,6 +8744,293 @@ class MinerichBot:
                         )
                         return
                     
+                    if data == "nft_menu":
+                        if not data_manager:
+                            await callback.message.edit_text("❌ Ошибка сервера.")
+                            return
+                        player = data_manager.players.get(callback.from_user.id)
+                        if not player:
+                            await callback.message.edit_text("❌ Игрок не найден.")
+                            return
+                        nft_stats = data_manager.get_player_nft_stats(callback.from_user.id)
+                        await self.safe_edit_message(
+                            callback.message,
+                            f"🎨 ВАША NFT КОЛЛЕКЦИЯ\n\n"
+                            f"📊 Всего NFT: {nft_stats.get('total', 0)}\n"
+                            f"👑 Лимитированных: {nft_stats.get('limited', 0)}\n\n"
+                            f"📈 Активные бонусы:\n" + 
+                            "\n".join([f"  • {stat}: +{value}" for stat, value in nft_stats.get('bonus', {}).items()]) if nft_stats.get('bonus') else "  • Нет активных бонусов",
+                            reply_markup=await self.keyboard_manager.nft_menu(nft_stats),
+                            parse_mode=ParseMode.MARKDOWN
+                        )
+                        return
+                    
+                    if data == "nft_buy_menu":
+                        await self.safe_edit_message(
+                            callback.message,
+                            "🎨 КУПИТЬ NFT\n\n"
+                            "Выберите NFT для покупки:",
+                            reply_markup=await self.keyboard_manager.nft_buy_menu(),
+                            parse_mode=ParseMode.MARKDOWN
+                        )
+                        return
+                    
+                    if data.startswith("nft_buy_"):
+                        nft_id = data[8:]
+                        if not data_manager:
+                            await callback.message.edit_text("❌ Ошибка сервера.")
+                            return
+                        nft = data_manager.nft_items.get(nft_id)
+                        if not nft:
+                            await callback.message.edit_text("❌ NFT не найден.")
+                            return
+                        await self.safe_edit_message(
+                            callback.message,
+                            self.text_templates.nft_info(nft),
+                            reply_markup=InlineKeyboardMarkup(
+                                inline_keyboard=[
+                                    [InlineKeyboardButton(text="🪙 Купить за золото", callback_data=f"nft_buy_gold_{nft_id}")],
+                                    [InlineKeyboardButton(text="💎 Купить за Premium Coin", callback_data=f"nft_buy_premium_{nft_id}")],
+                                    [InlineKeyboardButton(text="⬅️ Назад", callback_data="nft_buy_menu")]
+                                ]
+                            ),
+                            parse_mode=ParseMode.MARKDOWN
+                        )
+                        return
+                    
+                    if data.startswith("nft_buy_gold_"):
+                        nft_id = data[13:]
+                        if not data_manager:
+                            await callback.message.edit_text("❌ Ошибка сервера.")
+                            return
+                        success, msg = data_manager.buy_nft(callback.from_user.id, nft_id, "gold")
+                        if success:
+                            await self.safe_edit_message(
+                                callback.message,
+                                msg,
+                                reply_markup=await self.keyboard_manager.nft_menu(data_manager.get_player_nft_stats(callback.from_user.id)),
+                                parse_mode=ParseMode.MARKDOWN
+                            )
+                        else:
+                            await callback.answer(msg, show_alert=True)
+                        return
+                    
+                    if data.startswith("nft_buy_premium_"):
+                        nft_id = data[16:]
+                        if not data_manager:
+                            await callback.message.edit_text("❌ Ошибка сервера.")
+                            return
+                        success, msg = data_manager.buy_nft(callback.from_user.id, nft_id, "premium")
+                        if success:
+                            await self.safe_edit_message(
+                                callback.message,
+                                msg,
+                                reply_markup=await self.keyboard_manager.nft_menu(data_manager.get_player_nft_stats(callback.from_user.id)),
+                                parse_mode=ParseMode.MARKDOWN
+                            )
+                        else:
+                            await callback.answer(msg, show_alert=True)
+                        return
+                    
+                    if data == "nft_upgrade_menu":
+                        if not data_manager:
+                            await callback.message.edit_text("❌ Ошибка сервера.")
+                            return
+                        player = data_manager.players.get(callback.from_user.id)
+                        if not player:
+                            await callback.message.edit_text("❌ Игрок не найден.")
+                            return
+                        if not player.nft_collection:
+                            await callback.message.edit_text("❌ У вас нет NFT для улучшения.", reply_markup=await self.keyboard_manager.back_button("nft_menu"))
+                            return
+                        await self.safe_edit_message(
+                            callback.message,
+                            "⚡ УЛУЧШИТЬ NFT\n\n"
+                            "Выберите NFT для улучшения:",
+                            reply_markup=await self.keyboard_manager.nft_upgrade_menu(player.nft_collection),
+                            parse_mode=ParseMode.MARKDOWN
+                        )
+                        return
+                    
+                    if data.startswith("nft_upgrade_"):
+                        nft_id = data[12:]
+                        if not data_manager:
+                            await callback.message.edit_text("❌ Ошибка сервера.")
+                            return
+                        await self.safe_edit_message(
+                            callback.message,
+                            "⚡ УЛУЧШИТЬ NFT\n\n"
+                            "Выберите способ улучшения:",
+                            reply_markup=InlineKeyboardMarkup(
+                                inline_keyboard=[
+                                    [InlineKeyboardButton(text="🪙 Улучшить за золото", callback_data=f"nft_upgrade_gold_{nft_id}")],
+                                    [InlineKeyboardButton(text="💎 Улучшить за Premium Coin", callback_data=f"nft_upgrade_premium_{nft_id}")],
+                                    [InlineKeyboardButton(text="👑 Превратить в лимитированный", callback_data=f"nft_upgrade_limited_{nft_id}")],
+                                    [InlineKeyboardButton(text="⬅️ Назад", callback_data="nft_upgrade_menu")]
+                                ]
+                            ),
+                            parse_mode=ParseMode.MARKDOWN
+                        )
+                        return
+                    
+                    if data.startswith("nft_upgrade_gold_"):
+                        nft_id = data[17:]
+                        if not data_manager:
+                            await callback.message.edit_text("❌ Ошибка сервера.")
+                            return
+                        success, msg, result = data_manager.upgrade_nft(callback.from_user.id, nft_id, False)
+                        if success:
+                            await self.safe_edit_message(
+                                callback.message,
+                                msg,
+                                reply_markup=await self.keyboard_manager.nft_menu(data_manager.get_player_nft_stats(callback.from_user.id)),
+                                parse_mode=ParseMode.MARKDOWN
+                            )
+                        else:
+                            await callback.answer(msg, show_alert=True)
+                        return
+                    
+                    if data.startswith("nft_upgrade_premium_"):
+                        nft_id = data[20:]
+                        if not data_manager:
+                            await callback.message.edit_text("❌ Ошибка сервера.")
+                            return
+                        success, msg, result = data_manager.upgrade_nft(callback.from_user.id, nft_id, True)
+                        if success:
+                            await self.safe_edit_message(
+                                callback.message,
+                                msg,
+                                reply_markup=await self.keyboard_manager.nft_menu(data_manager.get_player_nft_stats(callback.from_user.id)),
+                                parse_mode=ParseMode.MARKDOWN
+                            )
+                        else:
+                            await callback.answer(msg, show_alert=True)
+                        return
+                    
+                    if data.startswith("nft_upgrade_limited_"):
+                        nft_id = data[19:]
+                        if not data_manager:
+                            await callback.message.edit_text("❌ Ошибка сервера.")
+                            return
+                        success, msg = data_manager.upgrade_nft_to_limited(callback.from_user.id, nft_id)
+                        if success:
+                            await self.safe_edit_message(
+                                callback.message,
+                                msg,
+                                reply_markup=await self.keyboard_manager.nft_menu(data_manager.get_player_nft_stats(callback.from_user.id)),
+                                parse_mode=ParseMode.MARKDOWN
+                            )
+                        else:
+                            await callback.answer(msg, show_alert=True)
+                        return
+                    
+                    if data == "nft_market_menu":
+                        if not data_manager:
+                            await callback.message.edit_text("❌ Ошибка сервера.")
+                            return
+                        await self.safe_edit_message(
+                            callback.message,
+                            "🏪 РЫНОК NFT\n\n"
+                            "Здесь можно купить и продать NFT:",
+                            reply_markup=await self.keyboard_manager.nft_market_menu(data_manager.list_market_nft()),
+                            parse_mode=ParseMode.MARKDOWN
+                        )
+                        return
+                    
+                    if data.startswith("nft_market_buy_"):
+                        parts = data.split("_")
+                        if len(parts) >= 5:
+                            market_id = f"market_{parts[3]}_{parts[4]}"
+                            if not data_manager:
+                                await callback.message.edit_text("❌ Ошибка сервера.")
+                                return
+                            await self.safe_edit_message(
+                                callback.message,
+                                "Выберите способ оплаты:",
+                                reply_markup=InlineKeyboardMarkup(
+                                    inline_keyboard=[
+                                        [InlineKeyboardButton(text="🪙 Купить за золото", callback_data=f"nft_market_buy_gold_{market_id}")],
+                                        [InlineKeyboardButton(text="💎 Купить за Premium Coin", callback_data=f"nft_market_buy_premium_{market_id}")],
+                                        [InlineKeyboardButton(text="⬅️ Назад", callback_data="nft_market_menu")]
+                                    ]
+                                ),
+                                parse_mode=ParseMode.MARKDOWN
+                            )
+                        return
+                    
+                    if data.startswith("nft_market_buy_gold_"):
+                        market_id = data[19:]
+                        if not data_manager:
+                            await callback.message.edit_text("❌ Ошибка сервера.")
+                            return
+                        success, msg = data_manager.buy_market_nft(callback.from_user.id, market_id, False)
+                        if success:
+                            await self.safe_edit_message(
+                                callback.message,
+                                msg,
+                                reply_markup=await self.keyboard_manager.nft_market_menu(data_manager.list_market_nft()),
+                                parse_mode=ParseMode.MARKDOWN
+                            )
+                        else:
+                            await callback.answer(msg, show_alert=True)
+                        return
+                    
+                    if data.startswith("nft_market_buy_premium_"):
+                        market_id = data[22:]
+                        if not data_manager:
+                            await callback.message.edit_text("❌ Ошибка сервера.")
+                            return
+                        success, msg = data_manager.buy_market_nft(callback.from_user.id, market_id, True)
+                        if success:
+                            await self.safe_edit_message(
+                                callback.message,
+                                msg,
+                                reply_markup=await self.keyboard_manager.nft_market_menu(data_manager.list_market_nft()),
+                                parse_mode=ParseMode.MARKDOWN
+                            )
+                        else:
+                            await callback.answer(msg, show_alert=True)
+                        return
+                    
+                    if data == "nft_sell_menu":
+                        if not data_manager:
+                            await callback.message.edit_text("❌ Ошибка сервера.")
+                            return
+                        player = data_manager.players.get(callback.from_user.id)
+                        if not player:
+                            await callback.message.edit_text("❌ Игрок не найден.")
+                            return
+                        if not player.nft_collection:
+                            await callback.message.edit_text("❌ У вас нет NFT для продажи.", reply_markup=await self.keyboard_manager.back_button("nft_market_menu"))
+                            return
+                        await self.safe_edit_message(
+                            callback.message,
+                            "📤 ВЫСТАВИТЬ NFT НА ПРОДАЖУ\n\n"
+                            "Выберите NFT для продажи:",
+                            reply_markup=await self.keyboard_manager.nft_sell_menu(player.nft_collection),
+                            parse_mode=ParseMode.MARKDOWN
+                        )
+                        return
+                    
+                    if data.startswith("nft_sell_"):
+                        nft_id = data[8:]
+                        if not data_manager:
+                            await callback.message.edit_text("❌ Ошибка сервера.")
+                            return
+                        self.user_states[callback.from_user.id] = {
+                            "action": "nft_sell",
+                            "nft_id": nft_id,
+                            "step": "enter_price_gold",
+                            "timestamp": time.time()
+                        }
+                        await self.safe_edit_message(
+                            callback.message,
+                            f"Введите цену в золоте для NFT (или 0, если не хотите продавать за золото):",
+                            reply_markup=await self.keyboard_manager.cancel_button("nft_market_menu"),
+                            parse_mode=ParseMode.MARKDOWN
+                        )
+                        return
+                    
                     if data == "exchange_menu":
                         if not data_manager:
                             await callback.message.edit_text("❌ Ошибка сервера.")
@@ -7883,6 +9134,38 @@ class MinerichBot:
                         )
                         return
                     
+                    if data == "exchange_create_buy":
+                        await self.safe_edit_message(
+                            callback.message,
+                            "📈 СОЗДАНИЕ ОРДЕРА ПОКУПКИ\n\n"
+                            "Введите курс покупки Premium Coin (сколько 💎 вы хотите получить за 1 🪙):\n"
+                            "Пример: 2.5 (за 1 золото дадите 2.5 Premium Coin)",
+                            reply_markup=await self.keyboard_manager.cancel_button("exchange_manage"),
+                            parse_mode=ParseMode.MARKDOWN
+                        )
+                        self.user_states[callback.from_user.id] = {
+                            "action": "exchange_set_buy_rate",
+                            "step": "enter_rate",
+                            "timestamp": time.time()
+                        }
+                        return
+                    
+                    if data == "exchange_create_sell":
+                        await self.safe_edit_message(
+                            callback.message,
+                            "📉 СОЗДАНИЕ ОРДЕРА ПРОДАЖИ\n\n"
+                            "Введите курс продажи Premium Coin (сколько 💎 вы хотите отдать за 1 🪙):\n"
+                            "Пример: 1.5 (за 1 Premium Coin получите 1.5 золота)",
+                            reply_markup=await self.keyboard_manager.cancel_button("exchange_manage"),
+                            parse_mode=ParseMode.MARKDOWN
+                        )
+                        self.user_states[callback.from_user.id] = {
+                            "action": "exchange_set_sell_rate",
+                            "step": "enter_rate",
+                            "timestamp": time.time()
+                        }
+                        return
+                    
                     if data == "exchange_my_orders":
                         if not data_manager:
                             await callback.message.edit_text("❌ Ошибка сервера.")
@@ -7936,38 +9219,6 @@ class MinerichBot:
                             reply_markup=await self.keyboard_manager.back_button("exchange_menu"),
                             parse_mode=ParseMode.MARKDOWN
                         )
-                        return
-                    
-                    if data == "exchange_set_buy_rate":
-                        await self.safe_edit_message(
-                            callback.message,
-                            "📈 УСТАНОВКА КУРСА ПОКУПКИ\n\n"
-                            "Введите курс покупки Premium Coin (сколько 💎 вы хотите получить за 1 🪙):\n"
-                            "Пример: 2.5 (за 1 золото дадите 2.5 Premium Coin)",
-                            reply_markup=await self.keyboard_manager.cancel_button("exchange_manage"),
-                            parse_mode=ParseMode.MARKDOWN
-                        )
-                        self.user_states[callback.from_user.id] = {
-                            "action": "exchange_set_buy_rate",
-                            "step": "enter_rate",
-                            "timestamp": time.time()
-                        }
-                        return
-                    
-                    if data == "exchange_set_sell_rate":
-                        await self.safe_edit_message(
-                            callback.message,
-                            "📉 УСТАНОВКА КУРСА ПРОДАЖИ\n\n"
-                            "Введите курс продажи Premium Coin (сколько 💎 вы хотите отдать за 1 🪙):\n"
-                            "Пример: 1.5 (за 1 Premium Coin получите 1.5 золота)",
-                            reply_markup=await self.keyboard_manager.cancel_button("exchange_manage"),
-                            parse_mode=ParseMode.MARKDOWN
-                        )
-                        self.user_states[callback.from_user.id] = {
-                            "action": "exchange_set_sell_rate",
-                            "step": "enter_rate",
-                            "timestamp": time.time()
-                        }
                         return
                     
                     if data == "exchange_deposit":
@@ -8123,11 +9374,11 @@ class MinerichBot:
                         total_referral_bonus = player.referral_rewards_claimed
                         next_reward = ""
                         if player.referral_count < 5:
-                            next_reward = f"До 5 рефералов: {5 - player.referral_count} чел. → Мифический ящик"
+                            next_reward = f"До 5 рефералов: {5 - player.referral_count} чел. → Мифический ящик + 2500000🪙"
                         elif player.referral_count < 10:
-                            next_reward = f"До 10 рефералов: {10 - player.referral_count} чел. → Королевский рубин"
+                            next_reward = f"До 10 рефералов: {10 - player.referral_count} чел. → Королевский рубин + 5000000🪙"
                         elif player.referral_count < 20:
-                            next_reward = f"До 20 рефералов: {20 - player.referral_count} чел. → +10% множитель"
+                            next_reward = f"До 20 рефералов: {20 - player.referral_count} чел. → +10% множитель + 10000000🪙"
                         
                         await self.safe_edit_message(
                             callback.message,
@@ -8151,10 +9402,10 @@ class MinerichBot:
                             return
                         
                         text = "🎁 РЕФЕРАЛЬНЫЕ НАГРАДЫ\n\n"
-                        text += "• 1 реферал: 500 🪙\n"
-                        text += "• 5 рефералов: + Мифический ящик\n"
-                        text += "• 10 рефералов: + Королевский рубин\n"
-                        text += "• 20 рефералов: + 10% к множителю\n\n"
+                        text += "• 1 реферал: 500000 🪙\n"
+                        text += "• 5 рефералов: + Мифический ящик + 2500000 🪙\n"
+                        text += "• 10 рефералов: + Королевский рубин + 5000000 🪙\n"
+                        text += "• 20 рефералов: + 10% к множителю + 10000000 🪙\n\n"
                         text += f"Ваш прогресс: {player.referral_count}/20"
                         
                         await self.safe_edit_message(
@@ -8165,63 +9416,8 @@ class MinerichBot:
                         )
                         return
                     
-                    if data.startswith("market_gift_"):
-                        gift_index = int(data[12:]) - 1
-                        limited_gifts = [
-                            {"name": "🎁 Новогодний набор", "price": 10000, "items": ["🎄 Снежинка", "❄️ Ледяная кирка"]},
-                            {"name": "🎉 Юбилейный пакет", "price": 50000, "items": ["🎂 Праздничный торт", "🎈 Воздушный шар"]},
-                            {"name": "👑 Королевская коллекция", "price": 100000, "items": ["👑 Корона", "🏰 Замок"]},
-                            {"name": "🎃 Хэллоуинский сюрприз", "price": 75000, "items": ["🎃 Тыква", "🦇 Летучая мышь"]},
-                        ]
-                        
-                        gift = limited_gifts[gift_index]
-                        
-                        if not data_manager:
-                            await callback.message.edit_text("❌ Ошибка сервера.")
-                            return
-                        
-                        player = data_manager.players.get(callback.from_user.id)
-                        if not player or player.is_banned:
-                            await callback.answer("❌ Шахтёр не найден или забанен")
-                            return
-                        
-                        if player.gold_balance < gift["price"]:
-                            await callback.answer(f"❌ Нужно: {gift['price']} 🪙")
-                            return
-                        
-                        player.gold_balance -= gift["price"]
-                        
-                        for item_name in gift["items"]:
-                            item_id = str(uuid.uuid4())
-                            new_item = Item(
-                                item_id=item_id,
-                                serial_number=data_manager.generate_serial_number(),
-                                name=item_name,
-                                item_type=ItemType.COLLECTIBLE,
-                                rarity=ItemRarity.LIMITED,
-                                description=f"Лимитированный подарок из набора {gift['name']}",
-                                buy_price=gift["price"] // len(gift["items"]),
-                                sell_price=gift["price"] // len(gift["items"]) // 2,
-                                is_tradable=False,
-                                owner_id=callback.from_user.id,
-                                is_collectible=True,
-                                collectible_type=CollectibleType.GEMSTONE
-                            )
-                            data_manager.items[item_id] = new_item
-                            player.inventory.append(item_id)
-                        
-                        await data_manager.batch_save()
-                        
-                        await self.safe_edit_message(
-                            callback.message,
-                            f"✅ Куплен {gift['name']} за {gift['price']} 🪙\n\n🎁 Получено:\n" + "\n".join(f"  • {item}" for item in gift["items"]),
-                            reply_markup=await self.keyboard_manager.main_menu(),
-                            parse_mode=ParseMode.MARKDOWN
-                        )
-                        return
-                    
-                    # Остальные callback обработчики остаются без изменений...
-                    # (пропущены для краткости, но в полном коде все присутствуют)
+                    # Остальные callback обработчики остаются из оригинального кода
+                    # (для краткости пропущены, но в полном коде все присутствуют)
                     
                 except TelegramBadRequest as e:
                     if "query is too old" in str(e) or "message is not modified" in str(e):
@@ -8377,25 +9573,6 @@ class MinerichBot:
             except Exception:
                 pass
 
-    async def cleanup_rate_limits(self):
-        while True:
-            try:
-                await asyncio.sleep(300)
-                current_time = time.time()
-                
-                async with self._rate_limit_lock:
-                    for user_id in list(self.user_rate_limits.keys()):
-                        timestamps = self.user_rate_limits[user_id]
-                        timestamps = [t for t in timestamps if current_time - t < RATE_LIMIT_WINDOW]
-                        
-                        if timestamps:
-                            self.user_rate_limits[user_id] = timestamps
-                        else:
-                            del self.user_rate_limits[user_id]
-                            
-            except Exception:
-                pass
-
     async def memory_cleanup(self):
         while True:
             try:
@@ -8411,25 +9588,6 @@ class MinerichBot:
                 
                 gc.collect()
                 
-            except Exception:
-                pass
-
-    async def periodic_cache_cleanup(self):
-        while True:
-            try:
-                await asyncio.sleep(600)
-                
-                await self.keyboard_manager._cache.clear()
-                await self.donate_keyboards._cache.clear()
-                self.keyboard_manager._menu_cache.clear()
-                self.donate_keyboards._menu_cache.clear()
-                
-                if data_manager:
-                    current_time = time.time()
-                    for user_id in list(data_manager._player_last_access.keys()):
-                        if current_time - data_manager._player_last_access[user_id] > 86400:
-                            del data_manager._player_last_access[user_id]
-                        
             except Exception:
                 pass
 
