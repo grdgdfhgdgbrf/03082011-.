@@ -6722,7 +6722,7 @@ class MinerichBot:
                     player = data_manager.players.get(user_id)
                 
                 if player and player.can_send_notification():
-                    await self.safe_send_message(user_id, text, parse_mode=ParseMode,MARKDOWN)
+                    await self.safe_send_message(user_id, text, parse_mode=ParseMode.MARKDOWN)
                 
                 await asyncio.sleep(BATCH_SEND_DELAY)
             except Exception:
